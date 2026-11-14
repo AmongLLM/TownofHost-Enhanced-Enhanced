@@ -55,8 +55,8 @@ public class Main : BasePlugin
     public static ConfigEntry<string> DebugKeyInput { get; private set; }
 
     public const string PluginGuid = "top.niko233.townofhostenhancedenhanced";
-    public const string PluginVersion = "2026.1113.211.0";
-    public const string PluginDisplayVersion = "2.1.1-20261113";
+    public const string PluginVersion = "2026.1114.211.0";
+    public const string PluginDisplayVersion = "2.1.1-20261114";
     public static readonly string[] SupportedVersionAU = ["2026.9.29", "2026.11.3"];
 
     /******************* Change one of the three variables to true before making a release. *******************/
@@ -65,7 +65,7 @@ public class Main : BasePlugin
     public static readonly bool fullRelease = false; // Latest: V2.1.1
 
     public static readonly bool ShowGitHubButton = true;
-    public static readonly string GitHubInviteUrl = "https://github.com/Niko-s-Impostor-Server/TownofHost-Enhanced-Enhanced";
+    public static readonly string GitHubInviteUrl = "https://github.com/AmongLLM/TownofHost-Enhanced-Enhanced";
 
     public static readonly bool ShowWebsiteButton = true;
     public static readonly string WebsiteUrl = "https://tohee.niko233.top/";
