@@ -1,6 +1,7 @@
 ﻿using AmongUs.GameOptions;
 using Hazel;
 using InnerNet;
+using System;
 using System.Text;
 using TOHE.Roles.Core;
 using static TOHE.Options;
@@ -307,15 +308,18 @@ internal class Baker : RoleBase
     public override void OnFixedUpdate(PlayerControl player, bool lowLoad, long nowTime)
     {
         if (lowLoad || player.Is(CustomRoles.Famine)) return;
-        if (TransformNoMoreBread.GetBool() && BreadedPlayerCount(player.PlayerId).Item1 < Main.AllAlivePlayerControls.Where(x => !x.IsNeutralApocalypse()).Count()) return;
-        else if (!AllHasBread(player)) return;
 
-        player.RpcSetCustomRole(CustomRoles.Famine);
-        player.RpcChangeRoleBasis(CustomRoles.Famine);
-        player.GetRoleClass()?.OnAdd(_Player.PlayerId);
+        if (AllHasBread(player) || (TransformNoMoreBread.GetBool() && BreadedPlayerCount(player.PlayerId).Item1 >= Main.AllAlivePlayerControls.Count(x => !x.IsNeutralApocalypse())))
+        {
+            var bread = BreadedPlayerCount(player.PlayerId);
+            Logger.Info($"{player.GetRealName()} transformed to Famine with {bread.Item1}/{bread.Item2} bread", "Baker");
+            player.RpcChangeRoleBasis(CustomRoles.Famine);
+            player.RpcSetCustomRole(CustomRoles.Famine);
+            player.GetRoleClass()?.OnAdd(_Player.PlayerId);
 
-        player.Notify(GetString("BakerToFamine"));
-        player.RpcGuardAndKill(player);
+            player.Notify(GetString("BakerToFamine"));
+            player.RpcGuardAndKill(player);
+        }
     }
 }
 internal class Famine : RoleBase
@@ -410,6 +414,7 @@ internal class Famine : RoleBase
     }
     public override void OnCheckForEndVoting(PlayerState.DeathReason deathReason, params byte[] exileIds)
     {
+        Logger.Info($"Starting OnCheckForEndVoting", "Famine");
         if (_Player == null || exileIds == null || exileIds.Contains(_Player.PlayerId) || Baker.StarvedNonBreaded) return;
 
         var deathList = new HashSet<byte>();
@@ -417,21 +422,27 @@ internal class Famine : RoleBase
         foreach (var pc in Main.AllAlivePlayerControls)
         {
             if (pc.IsNeutralApocalypse() || Baker.HasBread(baker.PlayerId, pc.PlayerId)) continue;
+            Logger.Info($"Checking if Baker alive", "Famine");
             if (baker.IsAlive())
             {
+                Logger.Info($"Baker Alive", "Famine");
                 if (!Main.AfterMeetingDeathPlayers.ContainsKey(pc.PlayerId))
                 {
+                    Logger.Info($"{baker.GetRealName()} starving {pc.GetRealName()} because they had no bread", "Famine");
                     pc.SetRealKiller(baker);
                     deathList.Add(pc.PlayerId);
                 }
             }
             else
             {
-                Main.AfterMeetingDeathPlayers.Remove(pc.PlayerId);
+                Logger.Info($"Baker dead", "Famine");
+                if (Main.PlayerStates[pc.PlayerId].deathReason != PlayerState.DeathReason.Suicide)
+                    Main.AfterMeetingDeathPlayers.Remove(pc.PlayerId);
             }
         }
         CheckForEndVotingPatch.TryAddAfterMeetingDeathPlayers(PlayerState.DeathReason.Starved, [.. deathList]);
         Baker.BreadList[baker.PlayerId].Clear();
         Baker.StarvedNonBreaded = true;
+        Logger.Info($"Ended OnCheckForEndVoting", "Famine");
     }
 }
