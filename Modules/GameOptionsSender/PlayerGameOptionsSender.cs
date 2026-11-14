@@ -31,10 +31,7 @@ public class PlayerGameOptionsSender(PlayerControl player) : GameOptionsSender
     {
         get
         {
-            var manager = GameOptionsManager.Instance;
-            var current = manager.CurrentGameOptions;
-            var copy = manager.gameOptionsFactory.FromBytes(manager.gameOptionsFactory.ToBytes(current, false));
-            return Main.RealOptionsData.Restore(copy);
+            return Main.RealOptionsData.Restore(RoundGameOptions.ForPlayer(player.PlayerId));
         }
     }
     public override bool IsDirty { get; protected set; }
@@ -127,6 +124,9 @@ public class PlayerGameOptionsSender(PlayerControl player) : GameOptionsSender
          */
         player.BuildCustomGameOptions(ref opt);
 
+        if (Options.CurrentGameMode == CustomGameMode.CandR)
+            CopsAndRobbersManager.ApplyGameOptions(ref opt, player);
+
         AURoleOptions.EngineerCooldown = Mathf.Max(0.01f, AURoleOptions.EngineerCooldown);
 
         if (Main.AllPlayerKillCooldown.TryGetValue(player.PlayerId, out var killCooldown))
@@ -141,7 +141,7 @@ public class PlayerGameOptionsSender(PlayerControl player) : GameOptionsSender
 
         state.taskState.hasTasks = Utils.HasTasks(player.Data, false);
 
-        if (Main.UnShapeShifter.Contains(player.PlayerId))
+        if (Main.UnShapeShifter.Contains(player.PlayerId) && Options.CurrentGameMode != CustomGameMode.CandR)
         {
             AURoleOptions.ShapeshifterDuration = 1f;
         }
@@ -174,6 +174,8 @@ public class PlayerGameOptionsSender(PlayerControl player) : GameOptionsSender
             opt.SetInt(Int32OptionNames.KillDistance, 0);
         }
 
+        if (RoundGameOptions.LobbyOptions != null)
+            AURoleOptions.SetOpt(GameOptionsManager.Instance.CurrentGameOptions);
         return opt;
     }
 

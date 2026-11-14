@@ -55,9 +55,9 @@ public class Main : BasePlugin
     public static ConfigEntry<string> DebugKeyInput { get; private set; }
 
     public const string PluginGuid = "top.niko233.townofhostenhancedenhanced";
-    public const string PluginVersion = "2026.1104.211.1";
-    public const string PluginDisplayVersion = "2.1.1-20261104.1";
-    public const string SupportedVersionAU = "2026.9.29";
+    public const string PluginVersion = "2026.1113.211.0";
+    public const string PluginDisplayVersion = "2.1.1-20261113";
+    public static readonly string[] SupportedVersionAU = ["2026.9.29", "2026.11.3"];
 
     /******************* Change one of the three variables to true before making a release. *******************/
     public static readonly bool devRelease = true; // Latest: V2.1.0 Alpha 16 Hotfix 1
@@ -99,10 +99,14 @@ public class Main : BasePlugin
     public static ConfigEntry<bool> DarkTheme { get; private set; }
     public static ConfigEntry<bool> DisableLobbyMusic { get; private set; }
     public static ConfigEntry<bool> ShowTextOverlay { get; private set; }
+    public static ConfigEntry<bool> EnableOptionsShowerInLobby { get; private set; }
     public static ConfigEntry<bool> HorseMode { get; private set; }
     public static ConfigEntry<bool> ForceOwnLanguage { get; private set; }
     public static ConfigEntry<bool> ForceOwnLanguageRoleName { get; private set; }
     public static ConfigEntry<bool> EnableCustomButton { get; private set; }
+    public static ConfigEntry<bool> EnableHudToolbox { get; private set; }
+    public static ConfigEntry<bool> HudToolboxInstantActions { get; private set; }
+    public static ConfigEntry<bool> ShowHudDiagnostics { get; private set; }
     public static ConfigEntry<bool> EnableCustomSoundEffect { get; private set; }
     public static ConfigEntry<bool> EnableCustomDecorations { get; private set; }
     public static ConfigEntry<bool> SwitchVanilla { get; private set; }
@@ -518,14 +522,18 @@ public class Main : BasePlugin
         ShowFPS = Config.Bind("Client Options", "ShowFPS", false);
         EnableGM = Config.Bind("Client Options", "EnableGM", false);
         AutoStart = Config.Bind("Client Options", "AutoStart", false);
-        AutoReloadTags = Config.Bind("Client Options", "AutoReloadTags", false);
+        AutoReloadTags = Config.Bind("Client Options", "AutoReloadTags", true);
         DarkTheme = Config.Bind("Client Options", "DarkTheme", false);
         DisableLobbyMusic = Config.Bind("Client Options", "DisableLobbyMusic", false);
         ShowTextOverlay = Config.Bind("Client Options", "ShowTextOverlay", false);
+        EnableOptionsShowerInLobby = Config.Bind("Client Options", "EnableOptionsShowerInLobby", true);
         HorseMode = Config.Bind("Client Options", "HorseMode", false);
         ForceOwnLanguage = Config.Bind("Client Options", "ForceOwnLanguage", false);
         ForceOwnLanguageRoleName = Config.Bind("Client Options", "ForceOwnLanguageRoleName", false);
         EnableCustomButton = Config.Bind("Client Options", "EnableCustomButton", true);
+        EnableHudToolbox = Config.Bind("Client Options", "EnableHudToolbox", false);
+        HudToolboxInstantActions = Config.Bind("Client Options", "HudToolboxInstantActions", false);
+        ShowHudDiagnostics = Config.Bind("Client Options", "ShowHudDiagnostics", false);
         EnableCustomSoundEffect = Config.Bind("Client Options", "EnableCustomSoundEffect", true);
         EnableCustomDecorations = Config.Bind("Client Options", "EnableCustomDecorations", true);
         SwitchVanilla = Config.Bind("Client Options", "SwitchVanilla", false);
@@ -619,6 +627,10 @@ public class Main : BasePlugin
         handler.Info($"{nameof(ThisAssembly.Git.Tag)}: {ThisAssembly.Git.Tag}");
 
         ClassInjector.RegisterTypeInIl2Cpp<ErrorText>();
+        ClassInjector.RegisterTypeInIl2Cpp<AbstractPagingBehaviour>();
+        ClassInjector.RegisterTypeInIl2Cpp<MeetingHudPagingBehaviour>();
+        ClassInjector.RegisterTypeInIl2Cpp<ShapeShifterPagingBehaviour>();
+        ClassInjector.RegisterTypeInIl2Cpp<VitalsPagingBehaviour>();
         CustomRpcTransport.Register();
 
         Harmony.PatchAll();
@@ -907,6 +919,10 @@ public enum CustomRoles
     SpiritGuide = 484,
     SpiritGuideTOHE = 485,
     Socialite = 486,
+    JudgeVanilla = 487,
+    JudgeTOHE = 488,
+    Cop = 489,
+    Robber = 490,
 
     // Sub-role after 500
     NotAssigned = 500,
@@ -999,6 +1015,8 @@ public enum CustomWinner
     None = -3,
     Error = -4,
     Neutrals = -5,
+    Cops = CustomRoles.Cop,
+    Robbers = CustomRoles.Robber,
     Impostor = CustomRoles.Impostor,
     Crewmate = CustomRoles.Crewmate,
     Jester = CustomRoles.Jester,

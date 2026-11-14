@@ -22,17 +22,31 @@ internal static class OfficialChat
 
     // Transport only. Higher-level modules decide whether a delivered page belongs in history.
     internal static SentPage[] Send(PlayerControl actor, string text, byte recipient = byte.MaxValue, string title = null,
-        bool preserveDeadActor = false, Action<MessageWriter> send = null)
+        bool preserveDeadActor = false, Action<MessageWriter> send = null, bool privateTransport = false)
+        => SendTo(actor, text, title, preserveDeadActor, send, privateTransport, recipient);
+
+    internal static SentPage[] SendPrivate(PlayerControl actor, string text, IReadOnlyCollection<PlayerControl> recipients, string title)
+    {
+        var batch = OfficialAnticheatPolicy.Enabled ? new OfficialPacketBuilder.TargetedTransactionBatch() : null;
+        var pages = SendTo(actor, text, title, preserveDeadActor: false,
+            send: batch == null ? null : batch.Add, privateTransport: true, recipients: recipients);
+        batch?.Send();
+        return pages;
+    }
+
+    private static SentPage[] SendTo(PlayerControl actor, string text, string title, bool preserveDeadActor,
+        Action<MessageWriter> send, bool privateTransport, byte recipient = byte.MaxValue,
+        IReadOnlyCollection<PlayerControl> recipients = null)
     {
         var client = AmongUsClient.Instance;
         if (client == null || !client.AmHost || actor?.Data == null) return [];
         var sentPages = new List<SentPage>();
         lock (TransactionLock)
         {
-            title ??= actor.Data.PlayerName;
+            string senderName = actor.Data.PlayerName;
+            title ??= senderName;
             byte speakerId = actor.PlayerId;
-            // System messages need a living carrier; ghost chat preserves its dead sender
-            // because ChatManager sends it only to recipients whose Data.IsDead is true.
+            // System messages need a living actor. Player chat uses the actual speaker.
             if (!preserveDeadActor)
                 actor = Main.AllPlayerControls.Where(p => p?.Data != null && !p.Data.Disconnected && !p.Data.IsDead)
                     .OrderBy(p => p.PlayerId).FirstOrDefault(p => p == actor)
@@ -43,9 +57,8 @@ internal static class OfficialChat
             var context = OfficialSessionContext.Capture();
             bool Current() => context.IsCurrent() && client.AmHost;
 
-            var recipients = Main.AllPlayerControls.Where(p => p?.Data != null && !p.Data.Disconnected
-                && (recipient == byte.MaxValue || p.PlayerId == recipient)).OrderBy(p => p.PlayerId).ToArray();
-            foreach (var seer in recipients)
+            foreach (var seer in (recipients ?? Main.AllPlayerControls).Where(p => p?.Data != null && !p.Data.Disconnected
+                && (recipient == byte.MaxValue || p.PlayerId == recipient)).OrderBy(p => p.PlayerId))
             {
                 if (!Current()) return sentPages.ToArray();
                 if (seer.AmOwner)
@@ -59,11 +72,36 @@ internal static class OfficialChat
                 if (target < 0) continue; // A missing private recipient must never become a broadcast.
                 if (seer.IsModded())
                 {
-                    // Mod clients receive SystemChat; official packed mode also fragments
-                    // large payloads. Never send native SetName/QuickChat to mod clients.
                     try
                     {
-                        var (modHeading, modPages) = LocalPages(text ?? string.Empty, title ?? string.Empty);
+                        var (modHeading, modPages) = LocalPages(text ?? string.Empty, title, includeTitleInBudget: privateTransport);
+                        if (privateTransport)
+                        {
+                            // Use the same SystemChat envelope inside a server-targeted
+                            // GameDataTo. The custom queue's logical target is client-side only.
+                            foreach (string page in modPages)
+                            {
+                                using var packet = new OfficialPacketBuilder.BoundedWriter(SendOption.Reliable);
+                                var writer = packet.Writer;
+                                writer.StartMessage(6);
+                                writer.Write(client.GameId);
+                                writer.WritePacked(target);
+                                writer.StartMessage(2);
+                                writer.WritePacked(PlayerControl.LocalPlayer.NetId);
+                                writer.Write(RpcPayloadSnapshot.OuterCallId);
+                                writer.Write(target);
+                                writer.Write((uint)CustomRPC.SystemChat);
+                                writer.Write(actor.PlayerId);
+                                writer.Write(modHeading);
+                                writer.Write(page);
+                                writer.EndMessage();
+                                writer.EndMessage();
+                                if (send == null) OfficialNetworkSend.Send(client, writer);
+                                else send(writer);
+                                sentPages.Add(new(speakerId, seer, modHeading, page));
+                            }
+                            continue;
+                        }
                         CustomRpcTransport.SendPayload(CustomRPC.SystemChat, writer =>
                         {
                             writer.Write(actor.PlayerId);
@@ -75,7 +113,9 @@ internal static class OfficialChat
                     }
                     catch (Exception error)
                     {
-                        Logger.Error($"Custom chat aborted for recipient {seer.PlayerId}: {error.GetType().Name}", "OfficialChat");
+                        Logger.Error($"Custom chat aborted: sender={senderName} ({speakerId}), " +
+                            $"recipient={seer.Data?.PlayerName} ({seer.PlayerId}), title={title}, message={text}\n{error}",
+                            "OfficialChat", escapeCRLF: false);
                     }
                     continue;
                 }
@@ -119,7 +159,7 @@ internal static class OfficialChat
                     }
                     finally { probe.Recycle(); }
                     if (available <= 0) throw new InvalidOperationException("The name restoration leaves no message budget.");
-                    Logger.Test($"recipient={seer.PlayerId}, inputNameUtf8Bytes={inputNameBytes}, " +
+                    Logger.Info($"recipient={seer.PlayerId}, inputNameUtf8Bytes={inputNameBytes}, " +
                         $"setHeadingUtf8Bytes={(actor == carrier ? 0 : Encoding.UTF8.GetByteCount(heading))}, " +
                         $"actorRestoreUtf8Bytes={actorRestoreBytes}, carrierRestoreUtf8Bytes={carrierRestoreBytes}, " +
                         $"textUtf8Bytes={textBytes}, paginatedBodyUtf8Bytes={Encoding.UTF8.GetByteCount(body)}, " +
@@ -127,7 +167,7 @@ internal static class OfficialChat
                     // Materialize all pages before sending so a later invalid token cannot leave
                     // a partially delivered message. Padding is repeated, outside the rich text.
                     var pages = Paginate(body, available).ToArray();
-                    Logger.Test($"recipient={seer.PlayerId}, pageCount={pages.Length}", "OfficialChat.Pagination");
+                    Logger.Info($"recipient={seer.PlayerId}, pageCount={pages.Length}", "OfficialChat.Pagination");
                     int pageIndex = 0;
                     foreach (string page in pages)
                     {
@@ -135,7 +175,7 @@ internal static class OfficialChat
                         using var packet = BuildTransaction(actor, carrier, target, heading, padding + page + PageFooter, actorRestore, carrierRestore);
                         if (packet.Writer.Length > HardPacketBytes)
                             throw new InvalidOperationException("The complete chat transaction exceeds 1200 bytes.");
-                        Logger.Test($"recipient={seer.PlayerId}, page={++pageIndex}/{pages.Length}, " +
+                        Logger.Info($"recipient={seer.PlayerId}, page={++pageIndex}/{pages.Length}, " +
                             $"setCarrierNameUtf8Bytes={Encoding.UTF8.GetByteCount(padding + page + PageFooter)}, " +
                             $"packetBytes={packet.Writer.Length}", "OfficialChat.Pagination");
                         if (send == null) OfficialNetworkSend.Send(client, packet.Writer);
@@ -145,8 +185,9 @@ internal static class OfficialChat
                 }
                 catch (Exception error)
                 {
-                    // Never include private message text or player names in transport diagnostics.
-                    Logger.Error($"Chat transaction aborted for recipient {seer.PlayerId}: {error.GetType().Name}", "OfficialChat");
+                    Logger.Error($"Chat transaction aborted: sender={senderName} ({speakerId}), " +
+                        $"recipient={seer.Data?.PlayerName} ({seer.PlayerId}), title={title}, message={text}\n{error}",
+                        "OfficialChat", escapeCRLF: false);
                 }
             }
         }
@@ -162,16 +203,18 @@ internal static class OfficialChat
         bool textHasNamePadding = false, bool allowDeadSpeaker = false)
     {
         if (actor?.Data == null || !DestroyableSingleton<HudManager>.Instance) return (title ?? string.Empty, []);
-        title ??= actor.Data.PlayerName;
+        string speakerName = actor.Data.PlayerName;
+        title ??= speakerName;
         text ??= string.Empty;
-        var (heading, pages) = LocalPages(text, title, includeTitlePadding: !textHasNamePadding);
-        string padding = textHasNamePadding ? string.Empty : TitlePadding(heading);
         var previousActor = DisplayActor;
         string previousTitle = DisplayTitle;
-        bool showDeadSpeaker = allowDeadSpeaker && actor.Data.IsDead && PlayerControl.LocalPlayer?.Data != null
-            && !PlayerControl.LocalPlayer.Data.IsDead;
+        bool showDeadSpeaker = false;
         try
         {
+            var (heading, pages) = LocalPages(text, title, includeTitlePadding: !textHasNamePadding);
+            string padding = textHasNamePadding ? string.Empty : TitlePadding(heading);
+            showDeadSpeaker = allowDeadSpeaker && actor.Data.IsDead && PlayerControl.LocalPlayer?.Data != null
+                && !PlayerControl.LocalPlayer.Data.IsDead;
             // Override only the bubble's name at the native presentation boundary. Player data,
             // cosmetics, notifications and name caches continue to see the real player name.
             DisplayActor = actor;
@@ -179,6 +222,13 @@ internal static class OfficialChat
             if (showDeadSpeaker) actor.Data.IsDead = false;
             foreach (string page in pages)
                 DestroyableSingleton<HudManager>.Instance.Chat.AddChat(actor, padding + page + PageFooter, censor);
+            return (heading, pages);
+        }
+        catch (Exception error)
+        {
+            Logger.Error($"Local chat display failed: speaker={speakerName} ({actor.PlayerId}), " +
+                $"title={title}, message={text}\n{error}", "OfficialChat", escapeCRLF: false);
+            throw;
         }
         finally
         {
@@ -186,10 +236,10 @@ internal static class OfficialChat
             DisplayActor = previousActor;
             DisplayTitle = previousTitle;
         }
-        return (heading, pages);
     }
 
-    private static (string Heading, string[] Pages) LocalPages(string text, string title, bool includeTitlePadding = true)
+    private static (string Heading, string[] Pages) LocalPages(string text, string title, bool includeTitlePadding = true,
+        bool includeTitleInBudget = false)
     {
         if (Encoding.UTF8.GetByteCount(title) > 256)
         {
@@ -197,7 +247,9 @@ internal static class OfficialChat
             title = "TOHE";
         }
         string padding = includeTitlePadding ? TitlePadding(title) : string.Empty;
-        var pages = Paginate(text, SoftPacketBytes - Encoding.UTF8.GetByteCount(padding + PageFooter)).ToArray();
+        int available = SoftPacketBytes - Encoding.UTF8.GetByteCount(padding + PageFooter);
+        if (includeTitleInBudget) available -= Encoding.UTF8.GetByteCount(title);
+        var pages = Paginate(text, available).ToArray();
         return (title, pages);
     }
 

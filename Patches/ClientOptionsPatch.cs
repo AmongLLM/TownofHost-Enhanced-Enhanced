@@ -10,6 +10,7 @@ public static class CustomSoundOptionsMenuOpenPatch
     {
         CustomSoundMenu.Close();
         CloudMenu.Close();
+        HudToolbox.Close();
     }
 }
 
@@ -32,21 +33,21 @@ public static class OptionsMenuBehaviourStartPatch
     private static ClientOptionItem DarkTheme;
     private static ClientOptionItem DisableLobbyMusic;
     private static ClientOptionItem ShowTextOverlay;
+    private static ClientOptionItem EnableOptionsShowerInLobby;
     private static ClientOptionItem HorseMode;
     private static ClientOptionItem ForceOwnLanguage;
     private static ClientOptionItem ForceOwnLanguageRoleName;
     private static ClientOptionItem EnableCustomButton;
+    private static ClientOptionItem EnableHudToolbox;
     private static ClientOptionItem EnableCustomSoundEffect;
     private static ClientOptionItem CustomSoundsManage;
     private static ClientOptionItem EnableCustomDecorations;
     private static ClientOptionItem SwitchVanilla;
     private static ClientOptionItem CloudSettings;
 
-#if DEBUG
     private static ClientOptionItem VersionCheat;
     private static ClientOptionItem GodMode;
     private static ClientOptionItem AutoRehost;
-#endif
 
     public static void Postfix(OptionsMenuBehaviour __instance)
     {
@@ -56,9 +57,6 @@ public static class OptionsMenuBehaviourStartPatch
         if (Main.ResetOptions || !DebugModeManager.AmDebugger)
         {
             Main.ResetOptions = false;
-            Main.VersionCheat.Value = false;
-            Main.GodMode.Value = false;
-            Main.AutoRehost.Value = false;
         }
 
         if (UnlockFPS == null || UnlockFPS.ToggleButton == null)
@@ -116,6 +114,10 @@ public static class OptionsMenuBehaviourStartPatch
         {
             ShowTextOverlay = ClientOptionItem.Create("ShowTextOverlay", Main.ShowTextOverlay, __instance);
         }
+        if (EnableOptionsShowerInLobby == null || EnableOptionsShowerInLobby.ToggleButton == null)
+        {
+            EnableOptionsShowerInLobby = ClientOptionItem.Create("EnableOptionsShowerInLobby", Main.EnableOptionsShowerInLobby, __instance);
+        }
         if (HorseMode == null || HorseMode.ToggleButton == null)
         {
             HorseMode = ClientOptionItem.Create("HorseMode", Main.HorseMode, __instance, SwitchHorseMode);
@@ -144,6 +146,10 @@ public static class OptionsMenuBehaviourStartPatch
         {
             EnableCustomButton = ClientOptionItem.Create("EnableCustomButton", Main.EnableCustomButton, __instance);
         }
+        if (EnableHudToolbox == null || EnableHudToolbox.ToggleButton == null)
+        {
+            EnableHudToolbox = ClientOptionItem.Create("EnableHudToolbox", Main.EnableHudToolbox, __instance);
+        }
         if (EnableCustomSoundEffect == null || EnableCustomSoundEffect.ToggleButton == null)
         {
             EnableCustomSoundEffect = ClientOptionItem.Create("EnableCustomSoundEffect", Main.EnableCustomSoundEffect, __instance, CustomSoundMenu.RefreshEnabled);
@@ -168,23 +174,27 @@ public static class OptionsMenuBehaviourStartPatch
         if (CloudSettings == null || CloudSettings.ToggleButton == null)
             CloudSettings = ClientOptionItem.Create("CloudSettings", null, __instance, () => CloudMenu.Open(__instance));
 
-#if DEBUG
         if (EOSManager.Instance.friendCode.GetDevUser().DeBug)
         {
-            if ((VersionCheat == null || VersionCheat.ToggleButton == null) && DebugModeManager.AmDebugger)
+            if (VersionCheat == null || VersionCheat.ToggleButton == null)
             {
                 VersionCheat = ClientOptionItem.Create("VersionCheat", Main.VersionCheat, __instance);
             }
-            if ((GodMode == null || GodMode.ToggleButton == null) && DebugModeManager.AmDebugger)
+            if (GodMode == null || GodMode.ToggleButton == null)
             {
                 GodMode = ClientOptionItem.Create("GodMode", Main.GodMode, __instance);
             }
-            if ((AutoRehost == null || AutoRehost.ToggleButton == null) && DebugModeManager.AmDebugger)
+            if (AutoRehost == null || AutoRehost.ToggleButton == null)
             {
                 AutoRehost = ClientOptionItem.Create("AutoRehost", Main.AutoRehost, __instance);
             }
         }
-#endif
+        else
+        {
+            Main.VersionCheat.Value = false;
+            Main.GodMode.Value = false;
+            Main.AutoRehost.Value = false;
+        }
     }
 }
 [HarmonyPatch(typeof(OptionsMenuBehaviour), nameof(OptionsMenuBehaviour.Close))]

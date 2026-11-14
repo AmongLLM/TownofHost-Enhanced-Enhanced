@@ -14,6 +14,8 @@ public static class RoleAssign
         int seed = RoundAssignment.Begin(players.Select(pc => pc.PlayerId));
         if (Options.CurrentGameMode == CustomGameMode.FFA)
             RoleResult = players.ToDictionary(pc => pc.PlayerId, _ => CustomRoles.Killer);
+        else if (Options.CurrentGameMode == CustomGameMode.CandR)
+            RoleResult = CopsAndRobbersManager.SetRoles();
         else
         {
             RoundAssignment.RoleInput = RoleAssignmentCatalog.Capture(seed, players);
@@ -32,6 +34,7 @@ public static class RoleAssign
     public static int AddPhantomNum;
     public static int AddTrackerNum;
     public static int AddDetectiveNum;
+    public static int AddJudgeNum;
     public static int AddViperNum;
     public static void CalculateVanillaRoleCount()
     {
@@ -43,6 +46,7 @@ public static class RoleAssign
         AddPhantomNum = 0;
         AddTrackerNum = 0;
         AddDetectiveNum = 0;
+        AddJudgeNum = 0;
         AddViperNum = 0;
         foreach (var role in AllRoles)
         {
@@ -68,6 +72,9 @@ public static class RoleAssign
                     break;
                 case CustomRoles.DetectiveVanilla:
                     AddDetectiveNum++;
+                    break;
+                case CustomRoles.JudgeVanilla:
+                    AddJudgeNum++;
                     break;
                 case CustomRoles.Viper:
                     AddViperNum++;

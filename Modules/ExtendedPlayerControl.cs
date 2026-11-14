@@ -340,7 +340,7 @@ static class ExtendedPlayerControl
         // The game directs a client's own vote to the host and handles host votes locally.
         MeetingHud.Instance.CmdCastVote(playerId, suspectIdx);
     }
-    public static void RpcClearVoteDelay(this MeetingHud meeting, int clientId)
+    public static void RpcClearVoteDelay(this MeetingHud meeting, int clientId, bool onlyIfUncast = false)
     {
         if (!AmongUsClient.Instance.AmHost) return;
         var gameId = AmongUsClient.Instance.GameId;
@@ -358,6 +358,13 @@ static class ExtendedPlayerControl
             {
                 if (remaining <= 1) VoteCommand.PendingClears.Remove(pendingClear);
                 else VoteCommand.PendingClears[pendingClear] = remaining - 1;
+            }
+            if (onlyIfUncast)
+            {
+                if (meeting.CurrentState is not (MeetingHud.MeetingStates.NotVoted or MeetingHud.MeetingStates.Voted)) return;
+                var uncastVoter = clientId == AmongUsClient.Instance.ClientId
+                    ? PlayerControl.LocalPlayer : AmongUsClient.Instance.GetClient(clientId)?.Character;
+                if (uncastVoter == null || meeting.playerStates.FirstOrDefault(area => area.PlayerId.Value == uncastVoter.PlayerId)?.VotedForId.Value != byte.MaxValue) return;
             }
             if (AmongUsClient.Instance.ClientId == clientId)
             {
@@ -383,34 +390,47 @@ static class ExtendedPlayerControl
         player.RpcSetName(name);
     }
 
-    public static void RpcSetNamePrivate(this PlayerControl player, string name, PlayerControl seer = null, bool force = false)
+    public static int? RpcSetNamePrivate(this PlayerControl player, string name, PlayerControl seer = null, bool force = false,
+        CustomRpcSender sender = null)
     {
         //player: player whose name needs to be changed
         //seer: player who can see name changes
-        if (player == null || name == null || !AmongUsClient.Instance.AmHost) return;
+        if (player == null || name == null || !AmongUsClient.Instance.AmHost) return null;
         if (seer == null) seer = player;
 
-        if (!force && Main.LastNotifyNames.TryGetValue((player.PlayerId, seer.PlayerId), out var previousName) && previousName == name)
+        var key = (player.PlayerId, seer.PlayerId);
+        if (!force && Main.LastNotifyNames.TryGetValue(key, out var previousName) && previousName == name)
         {
             //Logger.info($"Cancel:{player.name}:{name} for {seer.name}", "RpcSetNamePrivate");
-            return;
+            return null;
         }
-        Main.LastNotifyNames[(player.PlayerId, seer.PlayerId)] = name;
+        if (sender == null) Main.LastNotifyNames[key] = name;
         HudManagerPatch.LastSetNameDesyncCount++;
         Logger.Info($"Set:{player?.Data?.PlayerName}:{name} for {seer.GetNameWithRole().RemoveHtmlTags()}", "RpcSetNamePrivate");
 
-        if (seer == null || player == null) return;
+        if (seer == null || player == null) return null;
 
         var leftPlayer = OnPlayerLeftPatch.LeftPlayerId;
-        if (seer.PlayerId == leftPlayer || player.PlayerId == leftPlayer) return;
+        if (seer.PlayerId == leftPlayer || player.PlayerId == leftPlayer) return null;
 
         var clientId = seer.GetClientId();
-        if (clientId == -1) return;
+        if (clientId == -1) return null;
+
+        if (sender != null)
+        {
+            sender.AutoStartRpc(player.NetId, (byte)RpcCalls.SetName, clientId)
+                .Write(player.Data.NetId)
+                .Write(name)
+                .EndRpc();
+            sender.onSendDelegate += () => Main.LastNotifyNames[key] = name;
+            return clientId;
+        }
 
         MessageWriter writer = AmongUsClient.Instance.StartImmediate(player.NetId, (byte)RpcCalls.SetName, SendOption.Reliable, clientId);
         writer.Write(player.Data.NetId);
         writer.Write(name);
         AmongUsClient.Instance.FinishImmediate(writer);
+        return clientId;
     }
     public static void RpcEnterVentDesync(this PlayerPhysics physics, int ventId, PlayerControl seer)
     {
@@ -839,7 +859,7 @@ static class ExtendedPlayerControl
         writer.Write(newSid);
         AmongUsClient.Instance.FinishImmediate(writer);
     }
-    public static void RpcTeleport(this PlayerControl player, Vector2 position, bool isRandomSpawn = false, bool sendInfoInLogs = true,
+    public static bool RpcTeleport(this PlayerControl player, Vector2 position, bool isRandomSpawn = false, bool sendInfoInLogs = true,
         OfficialPacketBuilder.Batch batch = null)
     {
         if (sendInfoInLogs)
@@ -872,7 +892,7 @@ static class ExtendedPlayerControl
             if (cancelTeleport)
             {
                 player.Notify(Utils.ColorString(Utils.GetRoleColor(CustomRoles.Impostor), GetString("ErrorTeleport")));
-                return;
+                return false;
             }
         }
 
@@ -898,12 +918,13 @@ static class ExtendedPlayerControl
                 writer.Write(newSid);
                 writer.EndMessage();
             });
-            return;
+            return true;
         }
         MessageWriter messageWriter = AmongUsClient.Instance.StartImmediate(netTransform.NetId, (byte)RpcCalls.SnapTo, SendOption.Reliable);
         NetHelpers.WriteVector2(position, messageWriter);
         messageWriter.Write(newSid);
         AmongUsClient.Instance.FinishImmediate(messageWriter);
+        return true;
     }
     public static void RpcRandomVentTeleport(this PlayerControl player)
     {
@@ -1093,6 +1114,11 @@ static class ExtendedPlayerControl
                 return player.GetClient().PlayerName;
             }
         }
+        // Cops stay shapeshifted to expose the unshift ability button. Use the
+        // default outfit's host-broadcast color name instead of the borrowed outfit name.
+        if (player != null && GameStates.IsInGame && Options.CurrentGameMode == CustomGameMode.CandR
+            && Main.AllPlayerNames.TryGetValue(player.PlayerId, out var modeName))
+            return Options.FormatNameMode.GetInt() == 1 ? player.Data.PlayerName : modeName;
         return isMeeting || player == null ? player?.Data?.PlayerName : player?.name;
     }
     public static bool IsShieldedFromFirstDeath(this PlayerControl player) => MeetingStates.FirstMeeting
@@ -1103,6 +1129,7 @@ static class ExtendedPlayerControl
     {
         if (GameStates.IsLobby) return false;
         if (!pc.IsAlive() || Pelican.IsEaten(pc.PlayerId) || DollMaster.IsDoll(pc.PlayerId)) return false;
+        if (Options.CurrentGameMode == CustomGameMode.CandR && pc.Is(CustomRoles.Cop)) return true;
         if (pc.IsShieldedFromFirstDeath() && !Options.ShieldedCanUseKillButton.GetBool()) return false;
         if (pc.Is(CustomRoles.Killer) || Mastermind.PlayerIsManipulated(pc)) return true;
 
@@ -1130,13 +1157,20 @@ static class ExtendedPlayerControl
             _ => false
         };
     }
-    public static bool CanUseVents(this PlayerControl player) => player != null && (player.CanUseImpostorVentButton() || player.GetCustomRole().GetVNRole() == CustomRoles.Engineer);
+    public static bool CanUseVents(this PlayerControl player)
+    {
+        if (player == null) return false;
+        if (Options.CurrentGameMode == CustomGameMode.CandR)
+            return player.Is(CustomRoles.Robber) && !CopsAndRobbersManager.captured.ContainsKey(player.PlayerId);
+        return player.CanUseImpostorVentButton() || player.GetCustomRole().GetVNRole() == CustomRoles.Engineer;
+    }
     public static bool CantUseVent(this PlayerControl player, int ventId) => player == null || !player.CanUseVents() || (CustomRoleManager.BlockedVentsList.TryGetValue(player.PlayerId, out var blockedVents) && blockedVents.Contains(ventId));
     public static bool HasAnyBlockedVent(this PlayerControl player) => player != null && CustomRoleManager.BlockedVentsList.TryGetValue(player.PlayerId, out var blockedVents) && blockedVents.Any();
     public static bool NotUnlockVent(this PlayerControl player, int ventId) => player != null && CustomRoleManager.DoNotUnlockVentsList.TryGetValue(player.PlayerId, out var blockedVents) && blockedVents.Contains(ventId);
 
     public static bool CanUseImpostorVentButton(this PlayerControl pc)
     {
+        if (Options.CurrentGameMode == CustomGameMode.CandR) return false;
         if (!pc.IsAlive()) return false;
         if (GameStates.IsHideNSeek) return true;
         if (pc.Is(CustomRoles.Killer) || pc.Is(CustomRoles.Nimble)) return true;
@@ -1151,6 +1185,7 @@ static class ExtendedPlayerControl
     }
     public static bool CanUseSabotage(this PlayerControl pc)
     {
+        if (Options.CurrentGameMode == CustomGameMode.CandR) return false;
         if (pc.Is(Custom_Team.Impostor) && !pc.IsAlive() && Options.DeadImpCantSabotage.GetBool()) return false;
 
         var playerRoleClass = pc.GetRoleClass();
@@ -1257,6 +1292,7 @@ static class ExtendedPlayerControl
     public static void NoCheckStartMeeting(this PlayerControl reporter, NetworkedPlayerInfo target, bool force = false)
     {
         //Method that can cause a meeting to occur regardless of whether it is in sabotage.
+        if (AntiBlackout.AirshipRecoveryInProgress) return;
         //If target is null, it becomes a button.
         if (Options.DisableMeeting.GetBool() && !force) return;
 

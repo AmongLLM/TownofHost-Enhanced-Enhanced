@@ -20,17 +20,14 @@ namespace TOHE;
 class CheckForEndVotingPatch
 {
     public static string TempExileMsg;
-    public static bool Prefix(MeetingHud __instance)
+    public static bool Prefix(MeetingHud __instance) => CountVotes(__instance, Input.GetKeyDown(KeyCode.F6));
+
+    internal static bool CountVotes(MeetingHud __instance, bool shouldSkip)
     {
         if (!AmongUsClient.Instance.AmHost) return true;
         if (__instance.state is MeetingHud.MeetingStates.Results or MeetingHud.MeetingStates.Proceeding) return false;
 
-        //Meeting Skip with vote counting on keystroke (m + delete)
-        var shouldSkip = false;
-        if (Input.GetKeyDown(KeyCode.F6))
-        {
-            shouldSkip = true;
-        }
+        VanillaJudgeMeeting.Prune(__instance);
 
         //  HasNotVoted = 255;
         //  MissedVote = 254;
@@ -80,7 +77,7 @@ class CheckForEndVotingPatch
 
                     if (AntiBlackout.BlackOutIsActive)
                     {
-                        __instance.AntiBlackRpcVotingComplete(states, exiled, false);
+                        __instance.RpcVotingCompleteByRecipient(states, exiled, false);
 
                         if (exiled != null)
                         {
@@ -299,6 +296,12 @@ class CheckForEndVotingPatch
                 voteLog.Info($"Exiled ID: {exileId} ({GetVoteName(exileId)}), max: {max} votes");
             }
 
+            bool wasOverruled = VanillaJudgeMeeting.TryResolve(__instance, out var judge, out byte judgeExileId, out ushort overruleNonce);
+            if (wasOverruled)
+            {
+                exileId = judgeExileId;
+                tie = false;
+            }
             voteLog.Info($"Decision to exiled a player: {exileId} ({GetVoteName(exileId)})");
 
             bool braked = false;
@@ -364,29 +367,31 @@ class CheckForEndVotingPatch
 
             exiledPlayer?.Object.SetRealKiller(null);
 
+            byte? preserveJudgeUseFor = null;
+            if (wasOverruled)
+            {
+                var judgeRole = judge.GetRoleClass();
+                judgeRole.AbilityLimit--;
+                judgeRole.SendSkillRPC();
+                if (exiledPlayer != null && exiledPlayer.PlayerId != judge.PlayerId && judgeRole.AbilityLimit >= 1 && !judge.IsModded())
+                    preserveJudgeUseFor = judge.PlayerId;
+            }
+
             ExileControllerWrapUpPatch.AntiBlackout_LastExiled = exiledPlayer;
             Main.LastVotedPlayerInfo = exiledPlayer;
             if (exiledPlayer != null) AntiBlackout.ExilePlayerId = exiledPlayer.PlayerId;
             AntiBlackout.PrepareVotingResult(exiledPlayer);
-            //RPC
-            if (AntiBlackout.BlackOutIsActive)
-            {
-                __instance.AntiBlackRpcVotingComplete(states, exiledPlayer, tie);
-
-                if (exiledPlayer != null)
-                {
-                    AntiBlackout.ShowExiledInfo = true;
-                    ConfirmEjections(exiledPlayer, true);
-                }
-            }
+            // Vanilla VotingComplete dereferences exiled when an overrule is shown.
+            bool showOverrule = wasOverruled && exiledPlayer != null;
+            if (AntiBlackout.BlackOutIsActive || preserveJudgeUseFor.HasValue)
+                __instance.RpcVotingCompleteByRecipient(states, exiledPlayer, tie, showOverrule, overruleNonce, preserveJudgeUseFor);
             else
-            {
-                __instance.RpcVotingComplete(states, exiledPlayer, tie, false, 0); // Normal processing
+                __instance.RpcVotingComplete(states, exiledPlayer, tie, showOverrule, showOverrule ? overruleNonce : (ushort)0);
 
-                if (exiledPlayer != null)
-                {
-                    ConfirmEjections(exiledPlayer);
-                }
+            if (exiledPlayer != null)
+            {
+                if (AntiBlackout.BlackOutIsActive) AntiBlackout.ShowExiledInfo = true;
+                ConfirmEjections(exiledPlayer, AntiBlackout.BlackOutIsActive);
             }
 
             CheckForDeathOnExile(PlayerState.DeathReason.Vote, exileId);
@@ -1107,6 +1112,7 @@ class MeetingHudStartPatch
                     pc.RpcSetNameEx(pc.GetRealName(isMeeting: true));
                 }
                 ChatUpdatePatch.DoBlockChat = false;
+                FactionChat.SendMeetingHints();
             }, 3f, "SetName To Chat");
         }
 

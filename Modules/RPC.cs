@@ -131,6 +131,7 @@ enum CustomRPC : uint
     AntiBlackoutBuffer,
     SyncWorkhorseTasks,
     RequestOptionChunks,
+    SyncCandRData = 202,
 }
 public enum Sounds
 {
@@ -705,6 +706,9 @@ internal class RPCHandlerPatch
             case CustomRPC.SyncFFAPlayer:
                 FFAManager.ReceiveRPCSyncFFAPlayer(reader);
                 break;
+            case CustomRPC.SyncCandRData:
+                CopsAndRobbersManager.ReceiveCandRData(reader);
+                break;
             case CustomRPC.SyncAllPlayerNames:
                 Main.AllPlayerNames.Clear();
                 Main.AllClientRealNames.Clear();
@@ -870,7 +874,8 @@ internal class PlayerPhysicsRPCHandlerPatch
 
         if (!Main.MeetingIsStarted)
         {
-            __instance.myPlayer.walkingToVent = true;
+            if (Options.CurrentGameMode != CustomGameMode.CandR || (RpcCalls)callId == RpcCalls.EnterVent)
+                __instance.myPlayer.walkingToVent = true;
             VentSystemDeterioratePatch.ForceUpdate = true;
         }
 

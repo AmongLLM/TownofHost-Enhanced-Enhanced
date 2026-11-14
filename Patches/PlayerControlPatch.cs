@@ -1,4 +1,5 @@
 ﻿using AmongUs.GameOptions;
+using BepInEx.Unity.IL2CPP.Utils.Collections;
 using Hazel;
 using InnerNet;
 using System;
@@ -145,6 +146,8 @@ class CheckMurderPatch
             || target.inMovingPlat // Moving Platform on Airhip and Zipline on Fungle
             || target.MyPhysics.Animations.IsPlayingEnterVentAnimation()
             || target.MyPhysics.Animations.IsPlayingAnyLadderAnimation()
+            || (Options.CurrentGameMode == CustomGameMode.CandR && target.Is(CustomRoles.Robber) && (target.walkingToVent
+                || (CoExitVentPatch.ExitingPlayers.TryGetValue(target.PlayerId, out var exitContext) && exitContext.IsCurrent())))
         )
         {
             Logger.Info("The target is in an unkillable state and the kill is canceled", "CheckMurder");
@@ -192,6 +195,11 @@ class CheckMurderPatch
         if (Options.CurrentGameMode == CustomGameMode.FFA)
         {
             FFAManager.OnPlayerAttack(killer, target);
+            return false;
+        }
+        if (Options.CurrentGameMode == CustomGameMode.CandR)
+        {
+            CopsAndRobbersManager.OnCopAttack(killer, target);
             return false;
         }
 
@@ -634,7 +642,7 @@ public static class CheckShapeshiftPatch
             Logger.Info("Checking while AntiBlackOut protect, shapeshift was canceled", "CheckShapeshift");
             return false;
         }
-        if (!(instance.Is(CustomRoles.ShapeshifterTOHE) || instance.Is(CustomRoles.Shapeshifter)) && target.IsShieldedFromFirstDeath())
+        if (Options.CurrentGameMode != CustomGameMode.CandR && !(instance.Is(CustomRoles.ShapeshifterTOHE) || instance.Is(CustomRoles.Shapeshifter)) && target.IsShieldedFromFirstDeath())
         {
             instance.RpcGuardAndKill(instance);
             instance.Notify(Utils.ColorString(Utils.GetRoleColor(instance.GetCustomRole()), GetString("PlayerIsShieldedByGame")));
@@ -723,7 +731,7 @@ class ReportDeadBodyPatch
     public static Dictionary<byte, List<NetworkedPlayerInfo>> WaitReport = [];
     public static bool Prefix(PlayerControl __instance, [HarmonyArgument(0)] NetworkedPlayerInfo target)
     {
-        if (GameStates.IsMeeting || GameStates.IsHideNSeek) return false;
+        if (GameStates.IsMeeting || GameStates.IsHideNSeek || AntiBlackout.AirshipRecoveryInProgress) return false;
 
         if (EAC.RpcReportDeadBodyCheck(__instance, target))
         {
@@ -731,7 +739,7 @@ class ReportDeadBodyPatch
             return false;
         }
         if (Options.DisableMeeting.GetBool()) return false;
-        if (Options.CurrentGameMode == CustomGameMode.FFA) return false;
+        if (Options.CurrentGameMode is CustomGameMode.FFA or CustomGameMode.CandR) return false;
 
         if (!CanReport[__instance.PlayerId])
         {
@@ -1180,7 +1188,10 @@ class FixedUpdateInNormalGamePatch
                                 if (randomPlayer == null) continue;
                                 UnShapeshifter.RpcShapeshift(randomPlayer, false);
                                 UnShapeshifter.RpcRejectShapeshift();
-                                UnShapeshifter.ResetPlayerOutfit(setNamePlate: true);
+                                if (Options.CurrentGameMode == CustomGameMode.CandR && UnShapeshifter.Is(CustomRoles.Cop))
+                                    CopsAndRobbersManager.SetCostume(CopsAndRobbersManager.RoleType.Cop, UnShapeshifter.PlayerId);
+                                else
+                                    UnShapeshifter.ResetPlayerOutfit(setNamePlate: true);
                                 Utils.NotifyRoles(SpecifyTarget: UnShapeshifter);
                                 Logger.Info($"Revert to shapeshifting state for: {player.GetRealName()}", "UnShapeShifer_FixedUpdate");
                             }
@@ -1247,6 +1258,18 @@ class FixedUpdateInNormalGamePatch
             }
             if (GameStates.IsInGame)
             {
+                string teamName = CopsAndRobbersManager.ShowTeamNames
+                    ? CopsAndRobbersManager.GetTeamName(__instance.PlayerId)
+                    : null;
+                if (teamName != null && !__instance.AmOwner)
+                {
+                    RoleText.enabled = false;
+                    string displayName = Utils.ColorString(Color.white, teamName);
+                    if (__instance.cosmetics.nameText.text != displayName)
+                        __instance.cosmetics.nameText.text = displayName;
+                    return Task.CompletedTask;
+                }
+
                 var RoleTextData = Utils.GetRoleAndSubText(PlayerControl.LocalPlayer.PlayerId, __instance.PlayerId, useShortNames: true);
                 RoleText.text = RoleTextData.Item1;
                 RoleText.color = RoleTextData.Item2;
@@ -1279,7 +1302,7 @@ class FixedUpdateInNormalGamePatch
                 if (seer != target && seer != DollMaster.DollMasterTarget)
                     target = DollMaster.SwapPlayerInfo(target); // If a player is possessed by the Dollmaster swap each other's controllers.
 
-                string RealName = target.GetRealName();
+                string RealName = teamName ?? target.GetRealName();
 
                 Mark.Clear();
                 Suffix.Clear();
@@ -1301,7 +1324,7 @@ class FixedUpdateInNormalGamePatch
                 }
 
                 RealName = RealName.ApplyNameColorData(seer, target, false);
-                if (PlayerIdentifiers.Shows(true, false))
+                if (teamName == null && PlayerIdentifiers.Shows(true, false))
                     RealName = PlayerIdentifiers.Prefix(target.PlayerId, RealName);
                 var seerRole = seer.GetCustomRole();
 
@@ -1352,6 +1375,8 @@ class FixedUpdateInNormalGamePatch
 
                 if (Options.CurrentGameMode == CustomGameMode.FFA)
                     Suffix.Append(FFAManager.GetPlayerArrow(seer, target));
+                else if (Options.CurrentGameMode == CustomGameMode.CandR)
+                    Suffix.Append(CopsAndRobbersManager.GetClosestArrow(seer, target));
 
                 /*if(main.AmDebugger.Value && main.BlockKilling.TryGetValue(target.PlayerId, out var isBlocked)) {
                     Mark = isBlocked ? "(true)" : "(false)";}*/
@@ -1491,12 +1516,24 @@ class PlayerStartPatch
 [HarmonyPatch(typeof(PlayerPhysics), nameof(PlayerPhysics.CoEnterVent))]
 class CoEnterVentPatch
 {
-    public static bool Prefix(PlayerPhysics __instance, [HarmonyArgument(0)] int id)
+    public static bool Prefix(PlayerPhysics __instance, [HarmonyArgument(0)] int id, out bool __state)
     {
+        __state = false;
         if (!AmongUsClient.Instance.AmHost || GameStates.IsHideNSeek) return true;
         Logger.Info($" {__instance.myPlayer.GetNameWithRole().RemoveHtmlTags()}, Vent ID: {id}", "CoEnterVent");
         if (__instance.myPlayer.IsAlive() && GameStates.IsInTask && ShipStatus.Instance
             && ShipStatus.Instance.AllVents.Any(vent => vent.Id == id)) AfkMonitor.RecordActivity(__instance.myPlayer);
+
+        if (Options.CurrentGameMode == CustomGameMode.CandR)
+        {
+            var playerId = __instance.myPlayer.PlayerId;
+            CoExitVentPatch.ExitingPlayers.Remove(playerId);
+            if (CopsAndRobbersManager.captured.ContainsKey(playerId))
+            {
+                __state = true;
+                return true;
+            }
+        }
 
         //FFA
         if (Options.CurrentGameMode == CustomGameMode.FFA && FFAManager.CheckCoEnterVent(__instance, id))
@@ -1528,10 +1565,16 @@ class CoEnterVentPatch
         playerRoleClass?.OnCoEnterVent(__instance, id);
         return true;
     }
-    public static void Postfix()
+    public static void Postfix(PlayerPhysics __instance, bool __state, ref Il2CppSystem.Collections.IEnumerator __result)
     {
+        // A captured remote may already have been teleported far from this vent.
+        if (__state && __result != null && !__instance.myPlayer.AmOwner)
+            __result = SkipCapturedVentEntry().WrapToIl2Cpp();
+
         _ = new LateTask(() => VentSystemDeterioratePatch.ForceUpdate = false, 1f, "Set Force Upadate As False", shoudLog: false);
     }
+
+    private static System.Collections.IEnumerator SkipCapturedVentEntry() { yield break; }
 }
 // Player entered in vent
 [HarmonyPatch(typeof(Vent), nameof(Vent.EnterVent))]
@@ -1559,12 +1602,15 @@ class EnterVentPatch
 [HarmonyPatch(typeof(PlayerPhysics), nameof(PlayerPhysics.CoExitVent))]
 class CoExitVentPatch
 {
-    public static void Postfix(PlayerPhysics __instance, [HarmonyArgument(0)] int id)
+    public static readonly Dictionary<byte, OfficialSessionContext> ExitingPlayers = [];
+
+    public static void Postfix(PlayerPhysics __instance, [HarmonyArgument(0)] int id, ref Il2CppSystem.Collections.IEnumerator __result)
     {
         if (GameStates.IsHideNSeek) return;
         Logger.Info($" {__instance.myPlayer.GetNameWithRole().RemoveHtmlTags()}, Vent ID: {id}", "CoExitVent");
 
         var player = __instance.myPlayer;
+        if (Options.CurrentGameMode == CustomGameMode.CandR) player.walkingToVent = false;
         if (Options.CurrentGameMode == CustomGameMode.FFA && FFAManager.FFA_DisableVentingWhenKCDIsUp.GetBool())
         {
             FFAManager.CoExitVent(player);
@@ -1572,9 +1618,37 @@ class CoExitVentPatch
 
         if (!AmongUsClient.Instance.AmHost) return;
 
+        if (Options.CurrentGameMode == CustomGameMode.CandR && player.Is(CustomRoles.Robber) && __result != null)
+        {
+            // Native exit clears inVent before its animation and movement lock finish.
+            var context = OfficialSessionContext.Capture();
+            ExitingPlayers[player.PlayerId] = context;
+            __result = AfterExitVent(__result, player, context).WrapToIl2Cpp();
+        }
+
         player.GetRoleClass()?.OnExitVent(player, id);
 
         _ = new LateTask(() => { player?.RpcSetVentInteraction(); }, 0.8f, $"Set vent interaction after exit vent {player?.PlayerId}", shoudLog: false);
+    }
+
+    private static System.Collections.IEnumerator AfterExitVent(Il2CppSystem.Collections.IEnumerator original, PlayerControl player, OfficialSessionContext context)
+    {
+        try
+        {
+            while (context.IsCurrent() && original.MoveNext()) yield return original.Current;
+            if (context.IsCurrent() && AmongUsClient.Instance.AmHost && GameStates.IsInTask && !GameStates.IsEnded && Options.CurrentGameMode == CustomGameMode.CandR)
+            {
+                if (CopsAndRobbersManager.captured.TryGetValue(player.PlayerId, out var location))
+                    player.RpcTeleport(location);
+                CopsAndRobbersManager.OnRobberExitVent(player);
+            }
+        }
+        finally
+        {
+            if (ExitingPlayers.TryGetValue(player.PlayerId, out var exitContext) && exitContext == context)
+                ExitingPlayers.Remove(player.PlayerId);
+            original.TryCast<Il2CppSystem.IDisposable>()?.Dispose();
+        }
     }
 }
 [HarmonyPatch(typeof(PlayerControl), nameof(PlayerControl.CompleteTask))]
@@ -1884,7 +1958,7 @@ class PlayerControlSetRolePatch
             {
                 // The vanilla exile controller still needs the temporary living
                 // roster when it performs its end-of-game check.
-                foreach (var (seer, ghostRole) in GhostRoles.Where(entry => !AntiBlackout.IsProtectedRecipient(entry.Key.PlayerId)))
+                foreach (var (seer, ghostRole) in GhostRoles)
                     target.RpcSetRoleDesync(ghostRole, seer.GetClientId());
                 if (target.HasGhostRole()) GhostRoleAssign.CreateGAMessage(__instance);
                 return false;
@@ -1958,6 +2032,7 @@ class PlayerControlLocalSetRolePatch
                 RoleTypes.Phantom => CustomRoles.PhantomTOHE,
                 RoleTypes.Tracker => CustomRoles.TrackerTOHE,
                 RoleTypes.Detective => CustomRoles.DetectiveTOHE,
+                RoleTypes.Judge => CustomRoles.JudgeTOHE,
                 RoleTypes.Viper => CustomRoles.ViperTOHE,
                 RoleTypes.SpiritGuide => CustomRoles.SpiritGuideTOHE,
                 _ => CustomRoles.NotAssigned,

@@ -2,10 +2,10 @@
 using Hazel;
 using InnerNet;
 using System;
-using System.Runtime.CompilerServices;
 using TOHE.Modules;
 using TOHE.Roles.Core;
 using TOHE.Roles.Neutral;
+using UnityEngine;
 
 namespace TOHE;
 
@@ -14,7 +14,7 @@ public static class AntiBlackout
     // A three-player meeting must hide a real exile from vanilla clients so
     // their end-of-game check still sees one impostor and two crewmates.
     public static bool BlackOutIsActive { get; private set; }
-    public static bool ProtectingVanilla { get; private set; }
+    public static bool ProtectingVanilla => sentMask.Count > 0;
 
     //this is simply just called in less places, because antiblackout with role-basis changing is OP
     public static int ExilePlayerId = -1;
@@ -22,60 +22,67 @@ public static class AntiBlackout
 
     public static bool IsCached { get; private set; }
     private readonly static LogHandler logger = Logger.Handler("AntiBlackout");
-    private static readonly HashSet<byte> protectedRecipients = [];
     private static readonly HashSet<byte> bufferedPlayers = [];
     private static readonly HashSet<byte> hiddenRecipients = [];
     private static readonly Dictionary<(byte seer, byte target), RoleTypes> sentMask = [];
     private static readonly Dictionary<(byte seer, byte target), RoleTypes> deferredRoles = [];
+    private static readonly Dictionary<byte, float> airshipSpawnReadyAt = [];
+    private static HashSet<byte> airshipPendingPlayers;
     private static OfficialSessionContext meetingContext;
     private static uint meetingGeneration;
     private static bool votingResultPending;
     private static bool publishing;
-    private static bool serializing;
     private static bool warnedUnavailable;
 
     public static bool IsBuffered(byte playerId) => bufferedPlayers.Contains(playerId);
-    public static bool IsProtectedRecipient(byte playerId) => protectedRecipients.Contains(playerId);
-    internal static bool WaitingForGhostViews => votingResultPending && GhostRoleView.HasPendingPublications;
-    internal static bool RedirectingPlayerData => (ProtectingVanilla || WaitingForGhostViews) && !serializing;
+    internal static bool TryGetSelfRoleMask(byte playerId, out RoleTypes role) => sentMask.TryGetValue((playerId, playerId), out role);
+    internal static bool AirshipRecoveryInProgress => airshipPendingPlayers != null;
+    private readonly record struct PlayerView(byte Id, RoleTypes Role, bool Impostor, bool Alive,
+        int Margin, bool CanProtect, bool Dead, bool UncertainRole, int SnapshotCost);
 
-    // Evaluate the real post-meeting matrix, never the temporary mask. The role
-    // prototype supplies native IsImpostor; custom kill-button access is unrelated.
-    private static HashSet<byte> FindRiskyRecipients(PlayerControl[] players)
+    private static List<(PlayerView Player, bool Impostor)> FindProtection(List<PlayerView> view, byte seerId)
     {
-        HashSet<byte> risky = [];
-        foreach (var seer in players.Where(player => !player.IsModded()))
+        int startingMargin = view.Sum(player => player.Margin);
+        if (startingMargin > 0 && view.Any(player => player.Alive && player.Impostor)) return [];
+
+        // Keep one guaranteed impostor. Everyone else can only improve crew minus
+        // impostors by becoming a living crewmate. Keeping a pending crew death
+        // deferred costs no correction packet; the other changes cost one child.
+        var crew = view.Where(player => player.CanProtect && player.Margin < 1)
+            .OrderBy(player => player.Dead || player.Impostor || player.UncertainRole)
+            .ThenBy(player => player.Margin)
+            .ThenBy(player => player.Dead && !player.Impostor && !player.UncertainRole ? player.SnapshotCost : 0)
+            .ThenBy(player => player.Id == seerId).ToArray();
+        List<(PlayerView Player, bool Impostor)> best = null;
+        (int Sends, int Snapshots, int Changes, bool Self) bestCost = (int.MaxValue, 0, 0, false);
+        foreach (var impostor in view.Where(player => player.CanProtect))
         {
-            int impostors = 0, crew = 0;
-            bool missing = false;
-            foreach (var target in players)
+            int margin = startingMargin;
+            int sends = 0, snapshots = 0;
+            List<(PlayerView Player, bool Impostor)> changes = [];
+            if (!impostor.Alive || !impostor.Impostor)
             {
-                bool dead = target.Data.IsDead || target.PlayerId == ExilePlayerId
-                    || Main.AfterMeetingDeathPlayers.ContainsKey(target.PlayerId);
-                if (!RpcSetRoleReplacer.RoleMap.TryGetValue((seer.PlayerId, target.PlayerId), out var view))
-                {
-                    missing = true;
-                    break;
-                }
-                var roleType = dead ? GhostRoleView.ForRecipient(target, seer) : view.Item1;
-                if (deferredRoles.TryGetValue((seer.PlayerId, target.PlayerId), out var deferred))
-                    roleType = dead ? GhostRoleView.ForRecipient(target, seer) : deferred;
-                var role = DestroyableSingleton<RoleManager>.Instance.GetRole(roleType);
-                if (role == null) { missing = true; break; }
-                if (!dead)
-                {
-                    if (role.IsImpostor) impostors++;
-                    else crew++;
-                }
-                else if (roleType == RoleTypes.ImpostorGhost && target.Data.Role != null
-                    && target.Data.Role.TryCast<ImpostorGhostRole>() is { WasManuallyPicked: true }
-                    && role.IsImpostor)
-                    impostors++;
+                changes.Add((impostor, true));
+                margin -= 1 + impostor.Margin;
+                if (impostor.Dead || !impostor.Impostor || impostor.UncertainRole) sends++;
+                if (impostor.Dead && impostor.Impostor && !impostor.UncertainRole) snapshots += impostor.SnapshotCost;
             }
-            logger.Info($"Recipient {seer.PlayerId}: real post-meeting I={impostors}, C={crew}, incomplete={missing}");
-            if (missing || impostors <= 0 || crew <= impostors) risky.Add(seer.PlayerId);
+
+            foreach (var player in crew)
+            {
+                if (margin > 0) break;
+                if (player.Id == impostor.Id) continue;
+                changes.Add((player, false));
+                margin += 1 - player.Margin;
+                if (player.Dead || player.Impostor || player.UncertainRole) sends++;
+                if (player.Dead && !player.Impostor && !player.UncertainRole) snapshots += player.SnapshotCost;
+            }
+            var cost = (sends, snapshots, changes.Count, changes.Any(change => change.Player.Id == seerId));
+            if (margin <= 0 || cost.CompareTo(bestCost) >= 0) continue;
+            best = changes;
+            bestCost = cost;
         }
-        return risky;
+        return best;
     }
 
     public static void PrepareVotingResult(NetworkedPlayerInfo exiled)
@@ -83,136 +90,242 @@ public static class AntiBlackout
         meetingGeneration++;
         meetingContext = OfficialSessionContext.Capture();
         votingResultPending = true;
+        airshipSpawnReadyAt.Clear();
         warnedUnavailable = false;
         ExilePlayerId = exiled != null ? exiled.PlayerId : -1;
         var players = Main.AllPlayerControls.Where(player => player.Data != null && !player.Data.Disconnected && player.GetClientId() >= 0).ToArray();
         hiddenRecipients.Clear();
-        if (exiled != null && players.Length == 3) hiddenRecipients.UnionWith(FindRiskyRecipients(players));
+        // A visible exile leaves at most two connected players for the native check.
+        if (exiled != null && players.Length == 3 && players.Any(player => player.PlayerId == ExilePlayerId))
+            hiddenRecipients.UnionWith(players.Where(player => !player.IsModded()).Select(player => player.PlayerId));
         BlackOutIsActive = hiddenRecipients.Count > 0;
     }
 
-    public static void SetIsDead(bool doSend = true, [CallerMemberName] string callerMethodName = "")
+    internal static bool TryBeginAirshipRecovery(NetworkedPlayerInfo exiled)
+    {
+        if (GameStates.IsEnded || AirshipRecoveryInProgress) return false;
+        // Forced meeting closes can reach the picker without VotingComplete.
+        if (!votingResultPending) PrepareVotingResult(exiled);
+        if (!meetingContext.IsCurrent()) return false;
+        var players = Main.AllPlayerControls.Where(player => player.Data != null && !player.Data.Disconnected && player.GetClientId() >= 0).ToArray();
+        airshipPendingPlayers = players.Select(player => player.PlayerId).ToHashSet();
+        foreach (var player in players)
+            if (!player.AmOwner && Main.PlayerStates[player.PlayerId].HasSpawned) OnAirshipSpawn(player);
+        return true;
+    }
+
+    internal static void OnAirshipSpawn(PlayerControl player)
+    {
+        if (!AmongUsClient.Instance.AmHost || !votingResultPending || !meetingContext.IsCurrent()) return;
+        // Remote SnapTo precedes the picker closing and three fixed updates.
+        airshipSpawnReadyAt.TryAdd(player.PlayerId, Time.time + (player.AmOwner ? 0f : 0.25f));
+    }
+
+    public static void SetIsDead()
     {
         if (!votingResultPending || IsCached || GameStates.IsEnded) return;
-        logger.Info($"Prepare meeting protection from {callerMethodName}");
+        logger.Info("Prepare meeting protection");
         IsCached = true;
         SkipTasks = true;
         RefreshProtection();
-        if (doSend) SendGameData();
     }
 
-    private static void RefreshProtection()
+    private static void RefreshProtection(int leavingClientId = -1)
     {
-        var players = Main.AllPlayerControls.Where(player => player.Data != null && !player.Data.Disconnected && player.GetClientId() >= 0).ToArray();
-        var risky = FindRiskyRecipients(players);
-        protectedRecipients.IntersectWith(players.Select(player => player.PlayerId));
-        // Once a recipient has a mask it must keep it until the restoration transaction.
-        protectedRecipients.UnionWith(risky);
-        bool canProtect = players.Length >= 3 && (BlackOutIsActive || ExilePlayerId < 0 || players.Length >= 4);
-        if (!canProtect && protectedRecipients.Count > 0)
+        if (GameStates.IsEnded || !meetingContext.IsCurrent()) return;
+        var players = Main.AllPlayerControls.Where(player => player.Data != null && !player.Data.Disconnected &&
+            player.GetClientId() >= 0 && player.GetClientId() != leavingClientId).OrderBy(player => player.PlayerId).ToArray();
+        var byId = players.ToDictionary(player => player.PlayerId);
+        var roleManager = DestroyableSingleton<RoleManager>.Instance;
+        var changes = new Dictionary<(byte seer, byte target), RoleTypes>();
+        var snapshots = new HashSet<(byte seer, byte target)>();
+        bool unavailable = false;
+        bool compatible = OfficialAnticheatPolicy.Enabled;
+        CustomRpcSender roleSender = null;
+        publishing = true;
+        try
         {
-            protectedRecipients.Clear();
-            if (!warnedUnavailable)
+            foreach (var seer in players)
             {
-                warnedUnavailable = true;
-                ErrorText.Instance?.ShowAntiBlackoutWarning();
-                foreach (var player in players.Where(player => player.IsNonHostModdedClient()))
-                    CustomRpcTransport.SendPayload(CustomRPC.AntiBlackoutUnavailable, _ => { }, player.GetClientId());
-                logger.Warn("This meeting cannot construct a safe native roster");
+                byte seerId = seer.PlayerId;
+                if (seer.IsModded() || airshipSpawnReadyAt.ContainsKey(seerId)) continue;
+
+                var view = new List<PlayerView>(players.Length);
+                foreach (var target in players)
+                {
+                    byte id = target.PlayerId;
+                    bool visibleExile = id == ExilePlayerId && !hiddenRecipients.Contains(seerId);
+                    bool masked = sentMask.TryGetValue((seerId, id), out var role);
+                    bool dead = target.Data.IsDead;
+                    bool pendingDeath = id == ExilePlayerId || Main.AfterMeetingDeathPlayers.ContainsKey(id);
+                    bool known = RpcSetRoleReplacer.RoleMap.TryGetValue((seerId, id), out var actual);
+                    if (!masked && known) role = dead ? GhostRoleView.ForRecipient(target, seer) : actual.roleType;
+                    var native = masked || known ? roleManager.GetRole(role) : null;
+                    bool ghostPending = dead && !masked && GhostRoleView.IsPublicationPending(id);
+                    if (native == null)
+                    {
+                        // An unknown living role can count as an impostor.
+                        view.Add(new(id, role, false, false, !visibleExile && (!dead || ghostPending) ? -1 : 0, false, dead, false, 0));
+                        continue;
+                    }
+
+                    // The queued ghost role may not have arrived yet. A snapshot
+                    // alone cannot change the role instance the client counts.
+                    bool wasImpostor = ghostPending && roleManager.GetRole(actual.roleType)?.IsImpostor != false;
+                    bool uncertainRole = ghostPending && wasImpostor != native.IsImpostor;
+                    bool alive = !visibleExile && (masked || !dead && !pendingDeath);
+                    bool mayCountAsImpostor = !visibleExile && (native.IsImpostor && (masked || !dead) || wasImpostor);
+                    int margin = mayCountAsImpostor ? -1 : alive ? 1 : 0;
+                    // Prefer a shared snapshot when every recipient can use it.
+                    int snapshotCost = snapshots.Any(key => key.target == id) ? 1 : 2;
+                    view.Add(new(id, role, native.IsImpostor, alive, margin, !visibleExile, dead && !masked, uncertainRole, snapshotCost));
+                }
+
+                var plan = FindProtection(view, seerId);
+                if (plan == null)
+                {
+                    unavailable = true;
+                    continue;
+                }
+                foreach (var (entry, impostor) in plan)
+                {
+                    var key = (seerId, entry.Id);
+                    if (entry.Impostor == impostor && !entry.UncertainRole)
+                    {
+                        changes[key] = entry.Role;
+                        if (entry.Dead) snapshots.Add(key);
+                        continue;
+                    }
+
+                    // A living SetRole also clears IsDead through the native Revive path.
+                    var role = impostor ? RoleTypes.Impostor : RoleTypes.Crewmate;
+                    changes[key] = role;
+                    var target = byId[entry.Id];
+                    if (compatible)
+                        (roleSender ??= CustomRpcSender.Create("AntiBlackout protection")).RpcSetRole(target, role, seer.GetClientId());
+                    else target.RpcSetRoleDesync(role, seer.GetClientId());
+                }
             }
+            if (roleSender is { RecordCount: > 0 }) roleSender.SendTargetedBatchWithSummary("SetRole");
+            if (snapshots.Count > 0)
+            {
+                int packets = SendPlayerData(snapshots.Select(key => key.target).Distinct().Select(id => byId[id].Data), snapshots, leavingClientId);
+                logger.Info($"Meeting protection: {snapshots.Count} PlayerInfo views in {packets} packets");
+            }
+            foreach (var (key, role) in changes) sentMask[key] = role;
         }
-        ProtectingVanilla = protectedRecipients.Count > 0;
+        finally
+        {
+            roleSender?.Dispose();
+            publishing = false;
+        }
+
+        if (unavailable && !warnedUnavailable)
+        {
+            warnedUnavailable = true;
+            ErrorText.Instance?.ShowAntiBlackoutWarning();
+            foreach (var player in players.Where(player => player.IsNonHostModdedClient()))
+                CustomRpcTransport.SendPayload(CustomRPC.AntiBlackoutUnavailable, _ => { }, player.GetClientId());
+            logger.Warn("This meeting cannot construct a safe native roster for every vanilla recipient");
+        }
+
         int mode = Options.AntiBlackoutBufferMode.GetInt();
+        bool bufferChanged = bufferedPlayers.RemoveWhere(id => !byId.ContainsKey(id)) > 0;
         foreach (var player in players)
         {
-            if (mode == 0 || mode == 1 && !player.IsModded() || mode == 2 && protectedRecipients.Contains(player.PlayerId))
-                bufferedPlayers.Add(player.PlayerId);
-        }
-        bufferedPlayers.IntersectWith(players.Select(player => player.PlayerId));
-        SyncBuffer();
-        foreach (var player in players.Where(player => IsBuffered(player.PlayerId))) player.MarkDirtySettings();
-        GameOptionsSender.SendAllGameOptions();
-        if (ProtectingVanilla)
-        {
-            var dummyImp = players.First(player => player.PlayerId != ExilePlayerId);
-            publishing = true;
-            try
+            byte id = player.PlayerId;
+            if (airshipPendingPlayers != null && !airshipPendingPlayers.Contains(id)) continue;
+            if ((mode == 0 || mode == 1 && !player.IsModded() || mode == 2 && sentMask.Keys.Any(key => key.seer == id))
+                && bufferedPlayers.Add(id))
             {
-                foreach (var seer in players.Where(player => IsProtectedRecipient(player.PlayerId)))
-                    foreach (var target in players)
-                    {
-                        var role = target == dummyImp ? RoleTypes.Impostor : RoleTypes.Crewmate;
-                        var key = (seer.PlayerId, target.PlayerId);
-                        if (sentMask.TryGetValue(key, out var previous) && previous == role) continue;
-                        target.RpcSetRoleDesync(role, seer.GetClientId());
-                        sentMask[key] = role;
-                    }
+                player.MarkDirtySettings();
+                bufferChanged = true;
             }
-            finally { publishing = false; }
         }
-        Utils.NotifyRoles(NoCache: true);
-    }
-
-    // No authoritative death flag is changed. Only the affected recipient's
-    // serialization sees the living mask, including native dirty-player updates.
-    public static void SendGameData([CallerMemberName] string callerMethodName = "")
-    {
-        var batch = new OfficialPacketBuilder.Batch();
-        foreach (var info in GameData.Instance.AllPlayers)
-            if (info != null) SendPlayerData(info, batch);
-        batch.Send();
-    }
-
-    internal static void SendPlayerData(NetworkedPlayerInfo info, OfficialPacketBuilder.Batch batch = null)
-    {
-        if (WaitingForGhostViews) return;
-        bool ownsBatch = batch == null;
-        batch ??= new OfficialPacketBuilder.Batch();
-        foreach (var seer in Main.AllPlayerControls)
+        if (bufferChanged)
         {
-            if (seer.IsHost() || seer.Data == null || seer.Data.Disconnected || seer.GetClientId() < 0) continue;
-            batch.AddChild(seer.GetClientId(), writer =>
+            SyncBuffer();
+            GameOptionsSender.SendAllGameOptions();
+        }
+    }
+
+    private static int SendPlayerData(IEnumerable<NetworkedPlayerInfo> infos,
+        HashSet<(byte seer, byte target)> corrections = null, int leavingClientId = -1)
+    {
+        var recipients = Main.AllPlayerControls.Where(player => !player.IsHost() && player.Data != null &&
+            !player.Data.Disconnected && player.GetClientId() >= 0 && player.GetClientId() != leavingClientId).ToArray();
+        List<(int ClientId, NetworkedPlayerInfo Info, bool KeepAlive)> snapshots = [];
+        List<(byte, byte)> overwrittenNames = [];
+        foreach (var info in infos)
+        {
+            if (info == null) continue;
+            var targets = corrections == null ? recipients
+                : recipients.Where(seer => corrections.Contains((seer.PlayerId, info.PlayerId))).ToArray();
+            if (targets.Length == 0) continue;
+            var masked = targets.Where(seer => corrections != null || sentMask.ContainsKey((seer.PlayerId, info.PlayerId))).ToArray();
+            if (targets.Length == recipients.Length && (masked.Length == 0 || masked.Length == targets.Length))
+                snapshots.Add((-1, info, masked.Length > 0));
+            else
+                foreach (var seer in targets) snapshots.Add((seer.GetClientId(), info, masked.Contains(seer)));
+
+            foreach (var seer in targets)
+            {
+                var key = (info.PlayerId, seer.PlayerId);
+                if (Main.LastNotifyNames.TryGetValue(key, out var sentName) && sentName != info.PlayerName)
+                    overwrittenNames.Add(key);
+            }
+        }
+
+        var batch = new OfficialPacketBuilder.Batch();
+        foreach (var (clientId, info, keepAlive) in snapshots.OrderBy(snapshot => snapshot.ClientId))
+        {
+            batch.AddChild(clientId, writer =>
             {
                 writer.StartMessage(1);
                 writer.WritePacked(info.NetId);
                 bool dead = info.IsDead;
-                serializing = true;
                 try
                 {
-                    if (IsProtectedRecipient(seer.PlayerId) && !info.Disconnected) info.IsDead = false;
+                    if (keepAlive) info.IsDead = false;
                     info.Serialize(writer, true);
                 }
-                finally { info.IsDead = dead; serializing = false; }
+                finally { info.IsDead = dead; }
                 writer.EndMessage();
             });
         }
-        if (ownsBatch) batch.Send();
+        int packets = batch.Send();
+        // Player info also overwrites the client's default outfit name.
+        foreach (var key in overwrittenNames) Main.LastNotifyNames.Remove(key);
+        return packets;
     }
 
-    public static void RestoreIsDead(bool doSend = true, [CallerMemberName] string callerMethodName = "")
-    {
-        IsCached = false;
-        if (doSend) SendGameData();
-    }
+    public static void RestoreIsDead() => IsCached = false;
 
     // Hold actual role publications during business callbacks, and preserve an
     // existing mask until its single recovery transaction. RoleMap remains real.
     internal static bool DeferRole(PlayerControl target, RoleTypes role, int clientId)
     {
-        if (publishing || !votingResultPending) return false;
+        if (publishing || !votingResultPending || !ProtectingVanilla) return false;
         var seer = Main.AllPlayerControls.FirstOrDefault(player => player.GetClientId() == clientId);
-        if (seer == null || seer.IsModded() || !IsProtectedRecipient(seer.PlayerId)) return false;
+        if (seer == null || !sentMask.ContainsKey((seer.PlayerId, target.PlayerId))) return false;
         deferredRoles[(seer.PlayerId, target.PlayerId)] = role;
         return true;
     }
 
-    public static void OnDisconnect(NetworkedPlayerInfo player)
+    internal static void OnDisconnect(ClientData client, byte playerId)
     {
-        if (!AmongUsClient.Instance.AmHost || !votingResultPending || !player.Disconnected) return;
-        bufferedPlayers.Remove(player.PlayerId);
-        protectedRecipients.Remove(player.PlayerId);
-        RefreshProtection();
-        SendGameData();
+        if (!AmongUsClient.Instance.AmHost || !votingResultPending || GameStates.IsEnded || !meetingContext.IsCurrent()) return;
+        if (playerId == byte.MaxValue)
+            playerId = GameData.Instance.GetPlayerByClient(client)?.PlayerId ?? byte.MaxValue;
+        if (playerId == byte.MaxValue) return;
+        foreach (var key in sentMask.Keys.Where(key => key.seer == playerId || key.target == playerId).ToArray())
+            sentMask.Remove(key);
+        foreach (var key in deferredRoles.Keys.Where(key => key.seer == playerId || key.target == playerId).ToArray())
+            deferredRoles.Remove(key);
+        airshipPendingPlayers?.Remove(playerId);
+        airshipSpawnReadyAt.Remove(playerId);
+        RefreshProtection(client.Id);
+        Utils.NotifyRoles();
     }
 
     private static void SyncBuffer()
@@ -231,14 +344,17 @@ public static class AntiBlackout
         for (int i = 0; i < count; i++) bufferedPlayers.Add(reader.ReadByte());
     }
 
-    public static void AntiBlackRpcVotingComplete(this MeetingHud __instance, MeetingHud.VoterState[] states, NetworkedPlayerInfo exiled, bool tie)
+    public static void RpcVotingCompleteByRecipient(this MeetingHud __instance, MeetingHud.VoterState[] states, NetworkedPlayerInfo exiled, bool tie,
+        bool wasOverruled = false, ushort overruleNonce = 0, byte? preserveJudgeUseFor = null)
     {
+        wasOverruled &= exiled != null;
+        if (!wasOverruled) overruleNonce = 0;
         if (AmongUsClient.Instance.AmClient)
         {
-            __instance.VotingComplete(states, exiled, tie, false, 0);
+            __instance.VotingComplete(states, exiled, tie, wasOverruled, overruleNonce);
         }
 
-        using var sender = CustomRpcSender.Create("AntiBlack RpcVotingComplete", SendOption.Reliable);
+        using var sender = CustomRpcSender.Create("RpcVotingComplete by recipient", SendOption.Reliable);
         foreach (var pc in Main.AllPlayerControls)
         {
             if (pc.IsHost()) continue;
@@ -255,8 +371,12 @@ public static class AntiBlackout
                     }
                     sender.Write(exiled != null ? exiled.PlayerId : byte.MaxValue);
                     sender.Write(tie);
-                    sender.Write(false); // wasOverruled
-                    sender.Write((ushort)0); // overruleNonce
+                    // A vanilla Judge consumes its only native use when it
+                    // receives its own overrule. The host still enforces the
+                    // configured count and sends the actual exile here.
+                    bool showOverrule = wasOverruled && pc.PlayerId != preserveJudgeUseFor;
+                    sender.Write(showOverrule);
+                    sender.Write(showOverrule ? overruleNonce : (ushort)0);
                     sender.EndRpc();
                 }
             }
@@ -273,6 +393,7 @@ public static class AntiBlackout
                     }
                     sender.Write(byte.MaxValue);
                     sender.Write(true);
+                    // A hidden exile must stay a plain tie: native VotingComplete dereferences it for an overrule.
                     sender.Write(false);
                     sender.Write((ushort)0);
                     sender.EndRpc();
@@ -309,24 +430,24 @@ public static class AntiBlackout
         // CheckExile/OnPlayerExiled can add deaths after voting. Protect those
         // views before the delayed business callbacks publish any of the deaths.
         RefreshProtection();
-        SendGameData();
+        Utils.NotifyRoles();
         var generation = meetingGeneration;
         var context = meetingContext;
         Main.Instance.StartCoroutine(Complete());
 
         System.Collections.IEnumerator Complete()
         {
-            // Both anchors are after native recovery; Airship's anchor is after
-            // PrespawnStep, never the WrapUpAndSpawn iterator factory.
+            // On Airship this starts after exile is applied, as the host enters the picker.
             yield return new UnityEngine.WaitForSeconds(1.2f);
             if (!Current()) yield break;
             settle();
             if (!Current()) yield break;
             RefreshProtection();
-            SendGameData();
+            Utils.NotifyRoles();
             // Fixed empirical allowance, not a receiver WrapUp acknowledgement.
             // The first 1.2 seconds above already belongs to this two-second hold.
-            if (bufferedPlayers.Count > 0) yield return new UnityEngine.WaitForSeconds(0.8f);
+            if (bufferedPlayers.Count > 0 || ProtectingVanilla && airshipPendingPlayers == null)
+                yield return new UnityEngine.WaitForSeconds(0.8f);
             var barrier = CustomRpcTransport.CaptureBarrier();
             while (!barrier.IsComplete || GhostRoleView.HasPendingPublications)
             {
@@ -334,42 +455,88 @@ public static class AntiBlackout
                 yield return null;
             }
             if (!Current()) yield break;
+            if (airshipPendingPlayers != null)
+            {
+                while (airshipPendingPlayers.Count > 0)
+                {
+                    if (!GhostRoleView.HasPendingPublications)
+                    {
+                        var connected = Main.AllPlayerControls.Where(player => player.Data != null && !player.Data.Disconnected
+                            && player.GetClientId() >= 0 && airshipPendingPlayers.Contains(player.PlayerId)).ToArray();
+                        airshipPendingPlayers.IntersectWith(connected.Select(player => player.PlayerId));
+                        float now = Time.time;
+                        // Modded GMs skip the picker and do not send its spawn SnapTo.
+                        var ready = connected.Where(player => player.IsModded() && player.Is(CustomRoles.GM)
+                            || airshipSpawnReadyAt.TryGetValue(player.PlayerId, out float readyAt)
+                            && now >= readyAt).ToArray();
+                        if (ready.Length > 0) RestoreAirshipPlayers(ready);
+                    }
+                    if (!Current()) yield break;
+                    if (airshipPendingPlayers.Count == 0) break;
+                    yield return null;
+                    if (!Current()) yield break;
+                }
+                bufferedPlayers.Clear();
+                sentMask.Clear();
+                deferredRoles.Clear();
+                ResetAfterMeeting();
+                yield break;
+            }
+
             var releasedPlayers = bufferedPlayers.ToHashSet();
             bufferedPlayers.Clear();
             SetRealPlayerRoles(releasedPlayers);
             foreach (var seer in Main.AllPlayerControls)
                 if (seer.IsAlive() || seer.HasGhostRole()) seer.RpcResetAbilityCooldown();
-            protectedRecipients.Clear();
-            sentMask.Clear();
-            ProtectingVanilla = false;
-            SendGameData();
-            SyncBuffer();
+            if (releasedPlayers.Count > 0) SyncBuffer();
             ResetAfterMeeting();
             Utils.SyncAllSettings();
-            Utils.NotifyRoles(NoCache: true);
+            Utils.NotifyRoles();
         }
 
         bool Current() => generation == meetingGeneration && context.IsCurrent()
             && AmongUsClient.Instance.AmHost && !GameStates.IsEnded && votingResultPending;
     }
 
-    public static void SetRealPlayerRoles(HashSet<byte> releasedPlayers, bool sendGameDataAfter = false)
+    private static void RestoreAirshipPlayers(PlayerControl[] recipients)
+    {
+        var restoredIds = recipients.Select(player => player.PlayerId).ToHashSet();
+        var releasedPlayers = bufferedPlayers.Where(restoredIds.Contains).ToHashSet();
+        bufferedPlayers.ExceptWith(releasedPlayers);
+        SetRealPlayerRoles(releasedPlayers, recipients);
+        foreach (var player in recipients)
+        {
+            if (player.IsAlive() || player.HasGhostRole()) player.RpcResetAbilityCooldown();
+            player.MarkDirtySettings();
+        }
+
+        airshipPendingPlayers.ExceptWith(restoredIds);
+        if (releasedPlayers.Count > 0) SyncBuffer();
+        GameOptionsSender.SendAllGameOptions();
+        foreach (var player in recipients) Utils.NotifyRoles(SpecifySeer: player);
+    }
+
+    public static void SetRealPlayerRoles(HashSet<byte> releasedPlayers, PlayerControl[] recipients = null)
     {
         if (GameStates.IsEnded) return;
-        var vanillaPlayers = Main.AllPlayerControls.Where(player => !player.IsModded() && player.Data != null && !player.Data.Disconnected).ToArray();
+        var players = recipients ?? Main.AllPlayerControls;
+        var vanillaPlayers = players.Where(player => !player.IsModded() && player.Data != null && !player.Data.Disconnected).ToArray();
         Dictionary<byte, (RoleTypes SelfRole, bool RestoreSelf, float? Cooldown)> restorations = [];
 
         foreach (var seer in vanillaPlayers)
         {
-            bool restoreSelf = IsProtectedRecipient(seer.PlayerId) || deferredRoles.ContainsKey((seer.PlayerId, seer.PlayerId));
+            var key = (seer.PlayerId, seer.PlayerId);
+            bool restoreSelf = sentMask.ContainsKey(key) || deferredRoles.ContainsKey(key);
             if (!restoreSelf && !releasedPlayers.Contains(seer.PlayerId)) continue;
             RoleTypes selfRole = default;
             if (restoreSelf)
             {
-                if (RpcSetRoleReplacer.RoleMap.TryGetValue((seer.PlayerId, seer.PlayerId), out var selfView))
+                if (RpcSetRoleReplacer.RoleMap.TryGetValue(key, out var selfView))
                 {
                     selfRole = seer.Data.IsDead ? GhostRoleView.ForRecipient(seer, seer)
-                        : deferredRoles.GetValueOrDefault((seer.PlayerId, seer.PlayerId), selfView.Item1);
+                        : deferredRoles.GetValueOrDefault(key, selfView.roleType);
+                    if (!seer.Data.IsDead && sentMask.TryGetValue(key, out var temporary) && temporary == selfRole)
+                        restoreSelf = false;
                 }
                 else restoreSelf = false;
             }
@@ -377,24 +544,40 @@ public static class AntiBlackout
                 restorations[seer.PlayerId] = (selfRole, restoreSelf, null);
         }
 
-        ResetAllCooldown(releasedPlayers, restorations);
+        ResetAllCooldown(players, releasedPlayers, restorations);
         publishing = true;
         try
         {
+            using var roleSender = OfficialAnticheatPolicy.Enabled ? CustomRpcSender.Create("AntiBlackout role restoration") : null;
             foreach (var seer in vanillaPlayers)
             {
-                bool masked = IsProtectedRecipient(seer.PlayerId);
                 foreach (var target in Main.AllPlayerControls.Where(player => player.Data != null && !player.Data.Disconnected && player != seer))
                 {
-                    if (!RpcSetRoleReplacer.RoleMap.TryGetValue((seer.PlayerId, target.PlayerId), out var view)) continue;
-                    if (!masked && !deferredRoles.ContainsKey((seer.PlayerId, target.PlayerId))) continue;
+                    var key = (seer.PlayerId, target.PlayerId);
+                    if (!sentMask.ContainsKey(key) && !deferredRoles.ContainsKey(key)) continue;
+                    if (!RpcSetRoleReplacer.RoleMap.TryGetValue(key, out var view)) continue;
                     var role = target.Data.IsDead ? GhostRoleView.ForRecipient(target, seer)
-                        : deferredRoles.GetValueOrDefault((seer.PlayerId, target.PlayerId), view.Item1);
-                    target.RpcSetRoleDesync(role, seer.GetClientId());
+                        : deferredRoles.GetValueOrDefault(key, view.roleType);
+                    if (!target.Data.IsDead && sentMask.TryGetValue(key, out var temporary) && temporary == role) continue;
+                    if (roleSender == null) target.RpcSetRoleDesync(role, seer.GetClientId());
+                    else roleSender.RpcSetRole(target, role, seer.GetClientId());
                 }
+            }
+            if (roleSender is { RecordCount: > 0 }) roleSender.SendTargetedBatchWithSummary("SetRole");
+
+            // Publish other role views before each recipient's indivisible owner recovery packet.
+            foreach (var seer in vanillaPlayers)
+            {
                 if (!restorations.TryGetValue(seer.PlayerId, out var restoration)) continue;
-                var options = new PlayerGameOptionsSender(seer).BuildGameOptions();
+                bool sendOptions = restoration.Cooldown.HasValue || releasedPlayers.Contains(seer.PlayerId);
+                if (!sendOptions)
+                {
+                    seer.RpcSetRoleDesync(restoration.SelfRole, seer.GetClientId());
+                    continue;
+                }
+
                 var factory = GameOptionsManager.Instance.gameOptionsFactory;
+                var options = new PlayerGameOptionsSender(seer).BuildGameOptions();
                 var normalOptions = factory.ToBytes(options, AprilFoolsMode.IsAprilFoolsModeToggledOn);
                 // Reliable datagrams can arrive out of order. Keep the temporary
                 // cooldown, role, timer and normal settings in one recipient packet;
@@ -406,8 +589,9 @@ public static class AntiBlackout
                 writer.WritePacked(seer.GetClientId());
                 if (restoration.Cooldown is float cooldown)
                 {
-                    options.SetFloat(FloatOptionNames.KillCooldown, cooldown * 2f);
-                    WriteOptions(factory.ToBytes(options, AprilFoolsMode.IsAprilFoolsModeToggledOn));
+                    var temporaryOptions = factory.FromBytes(normalOptions);
+                    temporaryOptions.SetFloat(FloatOptionNames.KillCooldown, cooldown * 2f);
+                    WriteOptions(factory.ToBytes(temporaryOptions, AprilFoolsMode.IsAprilFoolsModeToggledOn));
                 }
                 if (restoration.RestoreSelf)
                 {
@@ -451,13 +635,24 @@ public static class AntiBlackout
             }
         }
         finally { publishing = false; }
-        deferredRoles.Clear();
-        if (sendGameDataAfter) SendGameData();
+        if (recipients == null)
+        {
+            sentMask.Clear();
+            deferredRoles.Clear();
+        }
+        else
+        {
+            var recipientIds = vanillaPlayers.Select(player => player.PlayerId).ToHashSet();
+            foreach (var key in sentMask.Keys.Where(key => recipientIds.Contains(key.seer)).ToArray())
+                sentMask.Remove(key);
+            foreach (var key in deferredRoles.Keys.Where(key => recipientIds.Contains(key.seer)).ToArray())
+                deferredRoles.Remove(key);
+        }
     }
-    private static void ResetAllCooldown(HashSet<byte> releasedPlayers,
+    private static void ResetAllCooldown(PlayerControl[] players, HashSet<byte> releasedPlayers,
         Dictionary<byte, (RoleTypes SelfRole, bool RestoreSelf, float? Cooldown)> restorations)
     {
-        foreach (var seer in Main.AllPlayerControls)
+        foreach (var seer in players)
         {
             if (seer.IsAlive())
             {
@@ -490,18 +685,21 @@ public static class AntiBlackout
         ExilePlayerId = -1;
         BlackOutIsActive = false;
         votingResultPending = false;
+        airshipPendingPlayers = null;
+        airshipSpawnReadyAt.Clear();
         warnedUnavailable = false;
     }
     public static void Reset()
     {
         logger.Info("==Reset==");
         meetingGeneration++;
-        protectedRecipients.Clear();
         bufferedPlayers.Clear();
         hiddenRecipients.Clear();
         deferredRoles.Clear();
         sentMask.Clear();
-        publishing = serializing = false;
+        airshipPendingPlayers = null;
+        airshipSpawnReadyAt.Clear();
+        publishing = false;
         GhostRoleView.ResetPending();
         IsCached = false;
         ShowExiledInfo = false;
@@ -509,31 +707,29 @@ public static class AntiBlackout
         ExilePlayerId = -1;
         SkipTasks = false;
         BlackOutIsActive = false;
-        ProtectingVanilla = false;
         votingResultPending = false;
         warnedUnavailable = false;
     }
 
     public static bool ShowExiledInfo = false;
     public static string StoreExiledMessage = "";
-}
-
-// A broadcast native player-info update would otherwise dismantle the private
-// living roster during exile or the buffer. Serialize the same update per seer.
-[HarmonyPatch(typeof(NetworkedPlayerInfo), nameof(NetworkedPlayerInfo.Serialize))]
-internal static class AntiBlackoutPlayerInfoPatch
-{
-    private static bool Prefix(NetworkedPlayerInfo __instance, [HarmonyArgument(1)] bool initialState, ref bool __result)
+    [HarmonyPatch(typeof(NetworkedPlayerInfo), nameof(NetworkedPlayerInfo.Serialize))]
+    private static class PlayerInfoPatch
     {
-        if (initialState || !AmongUsClient.Instance.AmHost || !AntiBlackout.RedirectingPlayerData) return true;
-        // Retain dirt until the queued native ghost publication has run. Sending
-        // IsDead first makes RoleManager skip the native Die transition.
-        if (!AntiBlackout.WaitingForGhostViews)
+        private static bool Prefix(NetworkedPlayerInfo __instance, [HarmonyArgument(1)] bool initialState, ref bool __result)
         {
-            AntiBlackout.SendPlayerData(__instance);
-            __instance.ClearOrDecrementDirt();
+            if (initialState || !votingResultPending || !__instance.IsDead || __instance.Disconnected
+                || !AmongUsClient.Instance.AmHost || GameStates.IsEnded) return true;
+
+            // An early death flag would make SetRole skip the native Die transition.
+            if (!GhostRoleView.IsPublicationPending(__instance.PlayerId))
+            {
+                if (!sentMask.Keys.Any(key => key.target == __instance.PlayerId)) return true;
+                SendPlayerData([__instance]);
+                __instance.ClearOrDecrementDirt();
+            }
+            __result = false;
+            return false;
         }
-        __result = false;
-        return false;
     }
 }

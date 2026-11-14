@@ -9,6 +9,7 @@ using TOHE.Modules.ChatManager;
 using TOHE.Patches;
 using TOHE.Roles.Core;
 using TOHE.Roles.Core.AssignManager;
+using TOHE.Roles.Vanilla;
 using UnityEngine;
 using static TOHE.Translator;
 
@@ -29,6 +30,7 @@ internal class ChangeRoleSettings
         {
             // Capture lobby values before applying any round-only role settings.
             Main.RealOptionsData = new OptionBackupData(GameOptionsManager.Instance.CurrentGameOptions);
+            if (__instance.AmHost && !GameStates.IsFreePlay) RoundGameOptions.Begin();
             if (GameStates.IsNormalGame)
                 Options.DefaultKillCooldown = Main.RealOptionsData.GetFloat(FloatOptionNames.KillCooldown);
 
@@ -82,7 +84,7 @@ internal class ChangeRoleSettings
             GameEndCheckerForNormal.ShouldNotCheck = false;
             GameEndCheckerForNormal.ForEndGame = false;
             GameEndCheckerForNormal.GameIsEnded = false;
-            GameStartManagerPatch.GameStartManagerUpdatePatch.AlredyBegin = false;
+            GameStartManagerPatch.GameStartManagerUpdatePatch.CancelPendingAutoStart();
             OnPlayerLeftPatch.LeftPlayerId = byte.MaxValue;
             VentSystemDeterioratePatch.LastClosestVent.Clear();
 
@@ -212,6 +214,7 @@ internal class ChangeRoleSettings
 
             //FFA
             FFAManager.Init();
+            CopsAndRobbersManager.Init();
 
             FallFromLadder.Reset();
             CustomWinnerHolder.Reset();
@@ -256,6 +259,7 @@ internal class StartGameHostPatch
             { RoleTypes.Phantom, RoleAssign.AddPhantomNum },
             { RoleTypes.Tracker, RoleAssign.AddTrackerNum },
             { RoleTypes.Detective, RoleAssign.AddDetectiveNum },
+            { RoleTypes.Judge, RoleAssign.AddJudgeNum },
             { RoleTypes.Viper, RoleAssign.AddViperNum }
         };
     }
@@ -370,26 +374,24 @@ internal class StartGameHostPatch
 
         // SetRole initializes native ability timers from current game options.
         // Send the temporary values only after Started, on an independent clone.
-        var optionsManager = GameOptionsManager.Instance;
-        var current = optionsManager.CurrentGameOptions;
-        var opt = Main.RealOptionsData.Restore(
-            optionsManager.gameOptionsFactory.FromBytes(optionsManager.gameOptionsFactory.ToBytes(current, false)));
-        opt.SetFloat(FloatOptionNames.KillCooldown, 0f);
-        opt.SetFloat(FloatOptionNames.ShapeshifterCooldown, 0f);
-        opt.SetFloat(FloatOptionNames.GuardianAngelCooldown, 0f);
-        opt.SetBool(BoolOptionNames.ImpostorsCanSeeProtect, false);
-        opt.RoleOptions.SetRoleRate(RoleTypes.GuardianAngel, 0, 0);
-        opt.RoleOptions.SetRoleRate(RoleTypes.SpiritGuide, 0, 0);
-        if (Options.DisableVanillaRoles.GetBool())
-        {
-            foreach (var role in new[] { RoleTypes.Scientist, RoleTypes.Engineer, RoleTypes.Shapeshifter,
-                                        RoleTypes.Noisemaker, RoleTypes.Phantom, RoleTypes.Tracker })
-                opt.RoleOptions.SetRoleRate(role, 0, 0);
-        }
         var optionsBatch = new OfficialPacketBuilder.Batch();
         foreach (var pc in PlayerControl.AllPlayerControls.GetFastEnumerator())
         {
             if (pc == null || pc.Data == null || pc.Data.Disconnected) continue;
+            var opt = Main.RealOptionsData.Restore(RoundGameOptions.ForPlayer(pc.PlayerId));
+            opt.SetFloat(FloatOptionNames.JudgeTaskRequirementPercentage, JudgeTOHE.TaskRequirementPercentage);
+            opt.SetFloat(FloatOptionNames.KillCooldown, 0f);
+            opt.SetFloat(FloatOptionNames.ShapeshifterCooldown, 0f);
+            opt.SetFloat(FloatOptionNames.GuardianAngelCooldown, 0f);
+            opt.SetBool(BoolOptionNames.ImpostorsCanSeeProtect, false);
+            opt.RoleOptions.SetRoleRate(RoleTypes.GuardianAngel, 0, 0);
+            opt.RoleOptions.SetRoleRate(RoleTypes.SpiritGuide, 0, 0);
+            if (Options.DisableVanillaRoles.GetBool())
+            {
+                foreach (var role in new[] { RoleTypes.Scientist, RoleTypes.Engineer, RoleTypes.Shapeshifter,
+                                            RoleTypes.Noisemaker, RoleTypes.Phantom, RoleTypes.Tracker })
+                    opt.RoleOptions.SetRoleRate(role, 0, 0);
+            }
             new InitialGameOptionsSender(pc, opt).SendGameOptions(optionsBatch);
         }
         optionsBatch.Send();
@@ -477,6 +479,7 @@ internal class StartGameHostPatch
                     RoleTypes.Phantom => CustomRoles.Phantom,
                     RoleTypes.Tracker => CustomRoles.Tracker,
                     RoleTypes.Detective => CustomRoles.DetectiveTOHE,
+                    RoleTypes.Judge => CustomRoles.JudgeTOHE,
                     RoleTypes.Viper => CustomRoles.ViperTOHE,
                     _ => CustomRoles.NotAssigned
                 };
@@ -489,6 +492,19 @@ internal class StartGameHostPatch
                 foreach (var pair in Main.PlayerStates)
                 {
                     ExtendedPlayerControl.RpcSetCustomRole(pair.Key, pair.Value.MainRole);
+                }
+                goto EndOfSelectRolePatch;
+            }
+
+            if (Options.CurrentGameMode == CustomGameMode.CandR)
+            {
+                foreach (var (id, role) in RoleAssign.RoleResult)
+                {
+                    var player = Utils.GetPlayerById(id);
+                    if (!role.IsDesyncRole()) AssignCustomRole(role, player);
+                    ExtendedPlayerControl.RpcSetCustomRole(id, role);
+                    player?.GetRoleClass()?.OnAdd(id);
+                    if (role.GetVNRole() == CustomRoles.Shapeshifter) Main.CheckShapeshift[id] = false;
                 }
                 goto EndOfSelectRolePatch;
             }
@@ -563,6 +579,9 @@ internal class StartGameHostPatch
                     break;
                 case CustomGameMode.FFA:
                     GameEndCheckerForNormal.SetPredicateToFFA();
+                    break;
+                case CustomGameMode.CandR:
+                    GameEndCheckerForNormal.SetPredicateToCandR();
                     break;
             }
 

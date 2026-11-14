@@ -607,6 +607,14 @@ public static class Utils
     {
         var state = Main.PlayerStates[playerId];
         string deathReason = state.IsDead ? state.deathReason == PlayerState.DeathReason.etc && state.Disconnected ? GetString("Disconnected") : GetString("DeathReason." + state.deathReason) : GetString("Alive");
+        if (Options.CurrentGameMode == CustomGameMode.CandR)
+        {
+            if (!state.IsDead)
+                deathReason = CopsAndRobbersManager.captured.ContainsKey(playerId)
+                    ? ColorString(GetRoleColor(CustomRoles.Robber), GetString("Captured"))
+                    : ColorString(Color.cyan, deathReason);
+            return deathReason;
+        }
         if (RealKillerColor)
         {
             var KillerId = state.GetRealKiller();
@@ -648,6 +656,8 @@ public static class Utils
         if (GameStates.IsHideNSeek) return hasTasks;
 
         var role = States.MainRole;
+        if (Options.CurrentGameMode == CustomGameMode.CandR)
+            return hasTasks && CopsAndRobbersManager.HasTasks(role);
 
         if (States.RoleClass != null && States.RoleClass.HasTasks(playerData, role, ForRecompute) == false)
             hasTasks = false;
@@ -719,7 +729,11 @@ public static class Utils
             var ProgressText = new StringBuilder();
             var role = Main.PlayerStates[playerId].MainRole;
 
-            if (Options.CurrentGameMode == CustomGameMode.FFA && role == CustomRoles.Killer)
+            if (Options.CurrentGameMode == CustomGameMode.CandR)
+            {
+                ProgressText.Append(CopsAndRobbersManager.GetProgressText(playerId));
+            }
+            else if (Options.CurrentGameMode == CustomGameMode.FFA && role == CustomRoles.Killer)
             {
                 ProgressText.Append(FFAManager.GetDisplayScore(playerId));
             }
@@ -1902,6 +1916,10 @@ public static class Utils
 
         Logger.Info($" START - Count Seers: {seerList.Length} & Count Target: {targetList.Length}", "DoNotifyRoles");
 
+        using var nameSender = OfficialAnticheatPolicy.Enabled ? CustomRpcSender.Create(nameof(DoNotifyRoles)) : null;
+        var recipients = new HashSet<int>();
+        int setNameCount = 0;
+        bool showTeamNames = !isForMeeting && CopsAndRobbersManager.ShowTeamNames;
         //seer: player who updates the nickname/role/mark
         //target: seer updates nickname/role/mark of other targets
         foreach (var seer in seerList)
@@ -1925,7 +1943,7 @@ public static class Utils
             // Hide player names in during Mushroom Mixup if seer is alive and desync impostor
             if (!CamouflageIsForMeeting && MushroomMixupIsActive && seer.IsAlive() && !seer.Is(Custom_Team.Impostor) && seer.HasDesyncRole())
             {
-                seer.RpcSetNamePrivate("<size=0%>", force: NoCache);
+                SendName(seer, "\u200B", seer);
             }
             else
             {
@@ -1963,13 +1981,23 @@ public static class Utils
                     case CustomGameMode.FFA:
                         SelfSuffix.Append(FFAManager.GetPlayerArrow(seer));
                         break;
+                    case CustomGameMode.CandR:
+                        SelfSuffix.Append(CopsAndRobbersManager.GetClosestArrow(seer, seer));
+                        var teamTaskProgress = CopsAndRobbersManager.GetTeamTaskProgressText();
+                        if (teamTaskProgress.Length > 0)
+                        {
+                            if (SelfSuffix.Length > 0) SelfSuffix.Append("\r\n");
+                            SelfSuffix.Append(teamTaskProgress);
+                        }
+                        break;
                 }
 
 
                 // ====== Get SeerRealName ======
 
-                string SeerRealName = seer.GetRealName(isForMeeting);
-                if (PlayerIdentifiers.Shows(false, isForMeeting))
+                string teamName = showTeamNames ? CopsAndRobbersManager.GetTeamName(seer.PlayerId) : null;
+                string SeerRealName = teamName ?? seer.GetRealName(isForMeeting);
+                if (teamName == null && PlayerIdentifiers.Shows(false, isForMeeting))
                     SeerRealName = PlayerIdentifiers.Prefix(seer.PlayerId, SeerRealName);
 
                 // ====== Combine SelfRoleName, SelfTaskText, SelfName, SelfDeathReason for seer ======
@@ -1986,7 +2014,9 @@ public static class Utils
                 }
 
                 bool IsDisplayInfo = false;
-                if (MeetingStates.FirstMeeting && Options.ChangeNameToRoleInfo.GetBool() && !isForMeeting && Options.CurrentGameMode != CustomGameMode.FFA)
+                if (MeetingStates.FirstMeeting && Options.ChangeNameToRoleInfo.GetBool() && !isForMeeting
+                    && Options.CurrentGameMode != CustomGameMode.FFA
+                    && (Options.CurrentGameMode != CustomGameMode.CandR || CopsAndRobbersManager.IntroRoleInfoActive))
                 {
                     IsDisplayInfo = true;
                     var SeerRoleInfo = seer.GetRoleInfo();
@@ -2031,7 +2061,7 @@ public static class Utils
                 if (!CamouflageIsForMeeting && Camouflage.IsCamouflage)
                     SelfName = $"<size=0%>{SelfName}</size>";
 
-                if (!Regex.IsMatch(SelfName, seer.GetRealName()))
+                if (!Regex.IsMatch(SelfName, teamName == null ? seer.GetRealName() : Regex.Escape(teamName)))
                     IsDisplayInfo = false;
 
                 switch (Options.CurrentGameMode)
@@ -2051,7 +2081,7 @@ public static class Utils
 
                 if (!isForMeeting) SelfName += "\r\n";
 
-                seer.RpcSetNamePrivate(SelfName, force: NoCache);
+                SendName(seer, SelfName, seer);
             }
 
             // Start run loop for target only when condition is "true"
@@ -2077,10 +2107,17 @@ public static class Utils
                     // Hide player names in during Mushroom Mixup if seer is alive and desync impostor
                     if (!CamouflageIsForMeeting && MushroomMixupIsActive && target.IsAlive() && !seer.Is(Custom_Team.Impostor) && seer.HasDesyncRole())
                     {
-                        realTarget.RpcSetNamePrivate("<size=0%>", seer, force: NoCache);
+                        SendName(realTarget, "\u200B", seer);
                     }
                     else
                     {
+                        string teamName = showTeamNames ? CopsAndRobbersManager.GetTeamName(target.PlayerId) : null;
+                        if (teamName != null)
+                        {
+                            SendName(realTarget, ColorString(Color.white, teamName), seer);
+                            continue;
+                        }
+
                         // ====== Add TargetMark for target ======
 
                         TargetMark.Clear();
@@ -2220,14 +2257,22 @@ public static class Utils
                             TargetName = $"{TargetRoleText}<color=#4fa1ff><u></color>{TargetPlayerName}</u>{TargetDeathReason}<color=#4fa1ff>✚</color>{TargetMark}{TargetSuffix}";
                         }
 
-                        realTarget.RpcSetNamePrivate(TargetName, seer, force: NoCache);
+                        SendName(realTarget, TargetName, seer);
                     }
                 }
             }
         }
-        //Logger.Info($" Loop for Targets: {}", "DoNotifyRoles", force: true);
-        Logger.Info($" END", "DoNotifyRoles");
+        if (nameSender is { RecordCount: > 0 }) nameSender.SendMessage();
+        int packetCount = nameSender?.SentPacketCount ?? setNameCount;
+        Logger.Info($" END - Recipients: {recipients.Count}, SetName: {setNameCount}, Packets: {packetCount}", "DoNotifyRoles");
         return Task.CompletedTask;
+
+        void SendName(PlayerControl target, string name, PlayerControl seer)
+        {
+            if (target.RpcSetNamePrivate(name, seer, force: NoCache, sender: nameSender) is not int clientId) return;
+            recipients.Add(clientId);
+            setNameCount++;
+        }
     }
     public static void MarkEveryoneDirtySettings()
     {
@@ -2241,11 +2286,6 @@ public static class Utils
     public static void SendGameData(SendOption sendOption = SendOption.Reliable)
     {
         if (sendOption != SendOption.Reliable) throw new ArgumentOutOfRangeException(nameof(sendOption));
-        if (AntiBlackout.RedirectingPlayerData)
-        {
-            AntiBlackout.SendGameData();
-            return;
-        }
         var batch = new OfficialPacketBuilder.Batch();
         foreach (var playerinfo in GameData.Instance.AllPlayers)
         {
@@ -2366,6 +2406,8 @@ public static class Utils
                 playerState.RoleClass.HasVoted = false;
             }
 
+            EvilTracker.SyncMeetingTargetSelection();
+
             //Set kill timer
             foreach (var player in Main.AllAlivePlayerControls)
             {
@@ -2460,8 +2502,9 @@ public static class Utils
         foreach (char c in t) bc += Encoding.GetEncoding("UTF-8").GetByteCount(c.ToString()) == 1 ? 1 : 2;
         return t?.PadRight(Mathf.Max(num - (bc - t.Length), 0));
     }
-    public static void DumpLog()
+    public static string DumpLog(bool announce = true)
     {
+        OfficialHazelSendHistory.Dump();
         // BepInEx exposes the disk writer, but not its chosen LogOutput.N.log path.
         string marker = $"[TOHE /dump {Guid.NewGuid():N}]";
         bool wroteMarker = false;
@@ -2501,6 +2544,8 @@ public static class Utils
         if (!Directory.Exists(f)) Directory.CreateDirectory(f);
         file.CopyTo(@filename);
 
+        if (!announce) return filename;
+
 #if ANDROID
         string savedFileName = filename;
 #else
@@ -2515,11 +2560,15 @@ public static class Utils
         ProcessStartInfo psi = new("Explorer.exe") { Arguments = "/e,/select," + @filename.Replace("/", "\\") };
         Process.Start(psi);
 #endif
+        return filename;
     }
 
 
     public static string SummaryTexts(byte id, bool disableColor = true, bool check = false)
     {
+        if (Options.CurrentGameMode == CustomGameMode.CandR)
+            return CopsAndRobbersManager.SummaryTexts(id, disableColor, check);
+
         var name = Main.AllPlayerNames[id].RemoveHtmlTags().Replace("\r\n", string.Empty);
         if (id == PlayerControl.LocalPlayer.PlayerId) name = DataManager.player.Customization.Name;
         else name = GetPlayerById(id)?.Data.PlayerName ?? name;

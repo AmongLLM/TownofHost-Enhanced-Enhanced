@@ -36,6 +36,7 @@ public class CustomRpcSender : IDisposable
     private static readonly HashSet<CustomRpcSender> Active = new();
     private readonly List<OfficialPacketCodec.Record> records = new();
     internal int RecordCount => records.Count;
+    internal int SentPacketCount { get; private set; }
     private int childOffset;
 
     private CustomRpcSender() { }
@@ -183,7 +184,7 @@ public class CustomRpcSender : IDisposable
         {
             if (!session.IsCurrent())
                 throw new InvalidOperationException("RPC sender belongs to an expired room");
-            OfficialPacketBuilder.Send(records, sendOption);
+            SentPacketCount = OfficialPacketBuilder.Send(records, sendOption);
             onSendDelegate?.Invoke();
             Logger.Info($"\"{name}\" is finished", "CustomRpcSender");
         }
@@ -191,6 +192,14 @@ public class CustomRpcSender : IDisposable
         {
             Release();
         }
+    }
+
+    internal void SendTargetedBatchWithSummary(string rpcName)
+    {
+        int recordCount = RecordCount;
+        int recipientCount = records.Select(record => record.Target).Distinct().Count();
+        if (recordCount > 0) SendMessage();
+        Logger.Info($"END - Recipients: {recipientCount}, {rpcName}: {recordCount}, Packets: {SentPacketCount}", name);
     }
 
     private int ChildBudget => OfficialPacketCodec.MaxChildLength(sessionGameId, currentRpcTarget,

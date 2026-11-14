@@ -66,6 +66,20 @@ internal class ChatCommands
             return false;
         }
         using var commandScope = privateCommand ? HostOnlyChatCommand.Enter() : null;
+        AfkMonitor.RecordActivity(PlayerControl.LocalPlayer);
+        if (AmongUsClient.Instance.AmHost)
+        {
+            if (FactionChat.TryHandle(PlayerControl.LocalPlayer, text))
+            {
+                __instance.freeChatField.Clear();
+                return false;
+            }
+        }
+        else if (FactionChat.IsCommand(text))
+        {
+            __instance.freeChatField.textArea.SetText(HostOnlyChatCommand.CreateEnvelope(text), string.Empty);
+            return true;
+        }
         __instance.timeSinceLastMessage = 3f;
         if (ChatHistory.Count == 0 || ChatHistory[^1] != historyText) ChatHistory.Add(historyText);
         ChatControllerUpdatePatch.CurrentHistorySelection = ChatHistory.Count;
@@ -76,7 +90,6 @@ internal class ChatCommands
         var cancelVal = "";
         Main.isChatCommand = true;
         Logger.Info(text, "SendChat");
-        AfkMonitor.RecordActivity(PlayerControl.LocalPlayer);
         if (FeatureChatCommands.TryHandle(PlayerControl.LocalPlayer, text)) goto Canceled;
         if (!AmongUsClient.Instance.AmHost && GuessManager.HandleChatGuessCommand(PlayerControl.LocalPlayer, text)) goto Canceled;
         if (!AmongUsClient.Instance.AmHost && HostOnlyChatCommand.IsRoleCommand(text))
@@ -178,6 +191,11 @@ internal class ChatCommands
                 case "/qmquiz":
                 case "/提问":
                     Quizmaster.ShowQuestion(PlayerControl.LocalPlayer);
+                    break;
+
+                case "/ability":
+                    subArgs = args.Length < 2 ? "" : args[1];
+                    CopsAndRobbersManager.AbilityDescription(subArgs);
                     break;
 
                 case "/win":
@@ -412,8 +430,20 @@ internal class ChatCommands
                         Utils.SendMessage($"/setplayers {ServerLimits.MinPlayers}–{ServerLimits.MaxPlayers}");
                         break;
                     }
-                    GameOptionsManager.Instance.CurrentGameOptions.SetInt(AmongUs.GameOptions.Int32OptionNames.MaxPlayers, playerLimit);
-                    GameOptionsManager.Instance.GameHostOptions = GameOptionsManager.Instance.CurrentGameOptions;
+                    var currentOptions = GameOptionsManager.Instance.CurrentGameOptions;
+                    currentOptions.SetInt(AmongUs.GameOptions.Int32OptionNames.MaxPlayers, playerLimit);
+                    var lobbyOptions = RoundGameOptions.LobbyOptions;
+                    if (lobbyOptions != null)
+                    {
+                        lobbyOptions.SetInt(AmongUs.GameOptions.Int32OptionNames.MaxPlayers, playerLimit);
+                        RoundGameOptions.SetMaxPlayers(playerLimit);
+                        PlayerGameOptionsSender.SetDirtyToAll();
+                        GameOptionsManager.Instance.GameHostOptions = lobbyOptions;
+                    }
+                    else
+                    {
+                        GameOptionsManager.Instance.GameHostOptions = currentOptions;
+                    }
                     GameManager.Instance?.LogicOptions?.SetDirty();
                     Utils.SendMessage(GetString("Message.MaxPlayers") + playerLimit);
                     break;
@@ -1623,6 +1653,38 @@ internal class ChatCommands
             Utils.SendMessage(GetString("ModeDescribe.FFA"), playerId);
             return;
         }
+        if (Options.CurrentGameMode == CustomGameMode.CandR)
+        {
+            var requestedRole = role.Trim().ToLower().TrimStart('*').Replace(" ", string.Empty);
+            var copName = GetString(CustomRoles.Cop.ToString()).ToLower().Trim().TrimStart('*').Replace(" ", string.Empty);
+            var robberName = GetString(CustomRoles.Robber.ToString()).ToLower().Trim().TrimStart('*').Replace(" ", string.Empty);
+
+            CustomRoles modeRole;
+            if (requestedRole == copName || requestedRole == "cop") modeRole = CustomRoles.Cop;
+            else if (requestedRole == robberName || requestedRole == "robber") modeRole = CustomRoles.Robber;
+            else
+            {
+                Utils.SendMessage(GetString("ModeDescribe.C&R"), playerId, Utils.ColorString(Utils.GetRoleColor(CustomRoles.Cop), GetString("ModeC&R")));
+                return;
+            }
+
+            var description = modeRole.GetInfoLong();
+            var title = Utils.ColorString(Utils.GetRoleColor(modeRole), GetString(modeRole.ToString()));
+            var roleColor = Utils.GetRoleColorCode(modeRole);
+            StringBuilder settings = new($"<size={Csize}><color={roleColor}>{GetString(modeRole.ToString())} {GetString("Settings:")}</color>\n");
+
+            foreach (var option in CopsAndRobbersManager.roleSettings[modeRole])
+            {
+                settings.Append($"{option.GetName(true)}: {option.GetString()}\n");
+                var depth = option.Children.Any() ? 1 : 0;
+                Utils.ShowChildrenSettings(option, ref settings, deep: depth);
+            }
+            settings.Append("</size>");
+
+            Utils.SendMessage(description, playerId, title, noReplay: true);
+            Utils.SendMessage(string.Empty, playerId, settings.ToString(), noReplay: true);
+            return;
+        }
         role = role.Trim();
 
         if (role == "" || role == string.Empty)
@@ -1714,6 +1776,12 @@ internal class ChatCommands
             OnReceiveChatCore(player, command, out _);
             return;
         }
+        // A bare channel command received over public chat is never relayed.
+        if (GameStates.IsModHost && FactionChat.IsCommand(text))
+        {
+            canceled = true;
+            return;
+        }
         OnReceiveChatCore(player, text, out canceled);
     }
 
@@ -1724,6 +1792,7 @@ internal class ChatCommands
             !player || player.Data == null || player.Data.Disconnected) return;
         AfkMonitor.RecordActivity(player);
         text = text.TrimStart('\n');
+        if (HostOnlyChatCommand.IsActive && FactionChat.TryHandle(player, text)) { canceled = true; return; }
         if (FeatureChatCommands.TryHandle(player, text)) { canceled = true; return; }
         if (!Blackmailer.CheckBlackmaile(player)) ChatManager.SendMessage(player, text);
 
@@ -1839,6 +1908,11 @@ internal class ChatCommands
             case "/qmquiz":
             case "/提问":
                 Quizmaster.ShowQuestion(player);
+                break;
+
+            case "/ability":
+                subArgs = args.Length < 2 ? "" : args[1];
+                CopsAndRobbersManager.AbilityDescription(subArgs, player.PlayerId);
                 break;
 
             case "/l":
@@ -2597,22 +2671,22 @@ class RpcSendChatPatch
             __result = true;
             return false;
         }
-        if (OfficialAnticheatPolicy.Enabled && AmongUsClient.Instance.AmHost)
+        // The native chat bubble uses the synchronized player name, not the Unity object name.
+        int nameLines = Regex.Matches(__instance.Data.PlayerName, @"\n|<br\s*/?>", RegexOptions.IgnoreCase).Count;
+        int existingPadding = Regex.Matches(chatText, @"\G\r*\n").Count;
+        int padding = Math.Max(0, nameLines - existingPadding);
+        if (OfficialAnticheatPolicy.Enabled && AmongUsClient.Instance.AmHost &&
+            Encoding.UTF8.GetByteCount(chatText) + padding > OfficialPacketCodec.SoftLimit)
         {
-            // This path already adds padding for each recipient's displayed title.
             ChatManager.SendPlayerText(__instance, chatText);
             __result = true;
             return false;
         }
-
-        // The native chat bubble uses the synchronized player name, not the Unity object name.
-        int nameLines = Regex.Matches(__instance.Data.PlayerName, @"\n|<br\s*/?>", RegexOptions.IgnoreCase).Count;
-        int existingPadding = Regex.Matches(chatText, @"\G\r*\n").Count;
-        if (nameLines > existingPadding)
-            chatText = new string('\n', nameLines - existingPadding) + chatText;
+        if (padding > 0)
+            chatText = new string('\n', padding) + chatText;
 
         // Remote free chat on official servers stays on the native owned-object path.
-        if (OfficialAnticheatPolicy.Enabled) return true;
+        if (OfficialAnticheatPolicy.Enabled && !AmongUsClient.Instance.AmHost) return true;
         if (AmongUsClient.Instance.AmClient && DestroyableSingleton<HudManager>.Instance)
             DestroyableSingleton<HudManager>.Instance.Chat.AddChat(__instance, chatText);
         if (chatText.Contains("who", StringComparison.OrdinalIgnoreCase))

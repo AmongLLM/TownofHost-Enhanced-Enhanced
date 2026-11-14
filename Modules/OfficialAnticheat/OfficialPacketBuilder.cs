@@ -21,10 +21,35 @@ public static class OfficialPacketBuilder
             records.Add(new OfficialPacketCodec.Record(target, Snapshot(owner.Writer, offset)));
         }
 
+        internal int Send()
+        {
+            if (records.Count == 0) return 0;
+            int packets = OfficialPacketBuilder.Send(records, SendOption.Reliable);
+            records.Clear();
+            return packets;
+        }
+    }
+
+    internal sealed class TargetedTransactionBatch
+    {
+        private readonly List<byte[]> transactions = [];
+
+        internal void Add(MessageWriter writer) => transactions.Add(Snapshot(writer, 3));
+
         internal void Send()
         {
-            if (records.Count > 0) OfficialPacketBuilder.Send(records, SendOption.Reliable);
-            records.Clear();
+            if (transactions.Count == 0) return;
+            var client = AmongUsClient.Instance;
+            var context = OfficialSessionContext.Capture();
+            using var owner = new BoundedWriter(SendOption.Reliable);
+            foreach (var packet in OfficialPacketCodec.PackTargetedTransactions(client.GameId, transactions, OfficialAnticheatPolicy.PackingLimit))
+            {
+                if (!context.IsCurrent()) throw new InvalidOperationException("Chat transaction belongs to an expired room");
+                owner.Writer.Clear(SendOption.Reliable);
+                owner.Writer.Write(new Il2CppStructArray<byte>(packet));
+                OfficialNetworkSend.Send(client, owner.Writer);
+            }
+            transactions.Clear();
         }
     }
 
@@ -70,7 +95,7 @@ public static class OfficialPacketBuilder
         return bytes;
     }
 
-    internal static void Send(IEnumerable<OfficialPacketCodec.Record> records, SendOption option)
+    internal static int Send(IEnumerable<OfficialPacketCodec.Record> records, SendOption option)
     {
         var client = AmongUsClient.Instance;
         var context = OfficialSessionContext.Capture();
@@ -85,6 +110,7 @@ public static class OfficialPacketBuilder
             owner.Writer.Write(new Il2CppStructArray<byte>(packet));
             OfficialNetworkSend.Send(client, owner.Writer);
         }
+        return packets.Count;
     }
 
     internal static void SendChild(int target, SendOption option, Action<MessageWriter> serialize)

@@ -102,6 +102,8 @@ class CoShowIntroPatch
             Logger.Error(error.ToString(), "ShipStatus.Begin");
         }
 
+        if (RoleDistribution.IsActive) RoleDistribution.InitialTaskAssignmentFinished = true;
+
         // Always replace the temporary zero-cooldown startup options, even if
         // task initialization failed. Cooldown repair uses these senders too.
         GameOptionsSender.AllSenders.Clear();
@@ -115,24 +117,6 @@ class CoBeginPatch
 {
 #if ANDROID
     public static bool Prepare() => AndroidIntroStateMachines.BeginMoveNext == null;
-
-    public static void Postfix(ref Il2CppSystem.Collections.IEnumerator __result)
-    {
-        if (__result != null) __result = CompleteIntro(__result, OfficialSessionContext.Capture()).WrapToIl2Cpp();
-    }
-
-    private static System.Collections.IEnumerator CompleteIntro(Il2CppSystem.Collections.IEnumerator original, OfficialSessionContext context)
-    {
-        try
-        {
-            while (context.IsCurrent() && original.MoveNext()) yield return original.Current;
-            if (!context.IsCurrent()) yield break;
-            IntroCutsceneDestroyPatch.Prefix();
-            IntroCutsceneDestroyPatch.Postfix();
-            AndroidIntroTextFallbackPatch.MarkIntroCompleted();
-        }
-        finally { original.TryCast<Il2CppSystem.IDisposable>()?.Dispose(); }
-    }
 #endif
     public static void Prefix()
     {
@@ -143,6 +127,32 @@ class CoBeginPatch
         RPC.RpcVersionCheck();
 
         FFAManager.SetData();
+    }
+
+    public static void Postfix(ref Il2CppSystem.Collections.IEnumerator __result)
+    {
+        if (__result == null) return;
+#if !ANDROID
+        if (Options.CurrentGameMode != CustomGameMode.CandR) return;
+#endif
+        __result = RunIntro(__result, OfficialSessionContext.Capture()).WrapToIl2Cpp();
+    }
+
+    private static System.Collections.IEnumerator RunIntro(Il2CppSystem.Collections.IEnumerator original, OfficialSessionContext context)
+    {
+        try
+        {
+            if (!context.IsCurrent()) yield break;
+            CopsAndRobbersManager.SetData();
+            while (context.IsCurrent() && original.MoveNext()) yield return original.Current;
+#if ANDROID
+            if (!context.IsCurrent()) yield break;
+            IntroCutsceneDestroyPatch.Prefix();
+            IntroCutsceneDestroyPatch.Postfix();
+            AndroidIntroTextFallbackPatch.MarkIntroCompleted();
+#endif
+        }
+        finally { original.TryCast<Il2CppSystem.IDisposable>()?.Dispose(); }
     }
 }
 #if ANDROID
@@ -220,7 +230,9 @@ internal static class AndroidIntroCompletionPatch
 
     public static void Prefix(Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase __instance)
     {
-        if ((int)state.GetValue(__instance) == 0) CoBeginPatch.Prefix();
+        if ((int)state.GetValue(__instance) != 0) return;
+        CoBeginPatch.Prefix();
+        CopsAndRobbersManager.SetData();
     }
 
     public static void Postfix(Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase __instance, bool __result)
@@ -312,7 +324,11 @@ internal static class AndroidIntroTextFallbackPatch
             intro = __instance.GetComponentInChildren<IntroCutscene>(true);
             if (intro) sawIntro = true;
         }
-        if (intro && !beginStarted && AndroidIntroStateMachines.BeginMoveNext == null) CoBeginPatch.Prefix();
+        if (intro && !beginStarted && AndroidIntroStateMachines.BeginMoveNext == null)
+        {
+            CoBeginPatch.Prefix();
+            CopsAndRobbersManager.SetData();
+        }
         if (!intro || !intro.RoleText || !intro.YouAreText) return;
         if (GameStates.IsNormalGame && styledTeam != intro && intro.ourCrewmate &&
             !intro.RoleText.gameObject.activeInHierarchy)
@@ -396,9 +412,9 @@ class SetUpRoleTextPatch
             // Return if game is ended or player in lobby or player is null
             if (AmongUsClient.Instance.IsGameOver || GameStates.IsLobby || PlayerControl.LocalPlayer == null) return;
 
-            var realName = Main.AllPlayerNames[PlayerControl.LocalPlayer.PlayerId];
-            // Don't use RpcSetName because the modded client needs to set the name locally
-            PlayerControl.LocalPlayer.SetName(realName);
+            // Keep the color name broadcast by the host in color mode.
+            if (Options.FormatNameMode.GetInt() != 1)
+                PlayerControl.LocalPlayer.SetName(Main.AllPlayerNames[PlayerControl.LocalPlayer.PlayerId]);
 
             Utils.DoNotifyRoles(NoCache: true);
         }, 1f, "Reset Name For Modded Players");
@@ -694,6 +710,9 @@ class BeginCrewmatePatch
             case CustomRoles.DetectiveTOHE:
                 PlayerControl.LocalPlayer.Data.Role.IntroSound = GetIntroSound(RoleTypes.Detective);
                 break;
+            case CustomRoles.JudgeTOHE:
+                PlayerControl.LocalPlayer.Data.Role.IntroSound = GetIntroSound(RoleTypes.Judge);
+                break;
             case CustomRoles.ViperTOHE:
                 PlayerControl.LocalPlayer.Data.Role.IntroSound = GetIntroSound(RoleTypes.Viper);
                 break;
@@ -780,6 +799,17 @@ class BeginCrewmatePatch
             PlayerControl.LocalPlayer.Data.Role.IntroSound = GetIntroSound(RoleTypes.Shapeshifter);
             __instance.ImpostorText.gameObject.SetActive(true);
             __instance.ImpostorText.text = GetString("KillerInfo");
+        }
+        else if (Options.CurrentGameMode == CustomGameMode.CandR)
+        {
+            __instance.TeamTitle.text = $"<size=75%>{GetString("C&R")}</size>";
+            __instance.TeamTitle.color = __instance.BackgroundBar.material.color = Color.blue;
+            __instance.ImpostorText.gameObject.SetActive(true);
+            __instance.ImpostorText.text = GetString("C&RShortInfo");
+            PlayerControl.LocalPlayer.Data.Role.IntroSound = role == CustomRoles.Cop
+                ? ShipStatus.Instance.SabotageSound
+                : DestroyableSingleton<HudManager>.Instance.TaskCompleteSound;
+            StartFadeIntro(__instance, Color.blue, Color.red);
         }
 
         // I hope no one notices this in code
@@ -947,7 +977,10 @@ class IntroCutsceneDestroyPatch
                         if (firstPlayer == null) continue;
                         PC.RpcShapeshift(firstPlayer, false);
                         PC.RpcRejectShapeshift();
-                        PC.ResetPlayerOutfit(force: true);
+                        if (Options.CurrentGameMode == CustomGameMode.CandR && PC.Is(CustomRoles.Cop))
+                            CopsAndRobbersManager.SetCostume(CopsAndRobbersManager.RoleType.Cop, PC.PlayerId);
+                        else
+                            PC.ResetPlayerOutfit(force: true);
                         Main.CheckShapeshift[id] = false;
                     }
                     Main.GameIsLoaded = true;
@@ -995,7 +1028,7 @@ class IntroCutsceneDestroyPatch
                 {
                     pc.RpcResetAbilityCooldown();
 
-                    if (Options.FixFirstKillCooldown.GetBool() && Options.CurrentGameMode != CustomGameMode.FFA)
+                    if (Options.FixFirstKillCooldown.GetBool() && Options.CurrentGameMode is not (CustomGameMode.FFA or CustomGameMode.CandR))
                     {
                         _ = new LateTask(() =>
                         {
@@ -1051,6 +1084,7 @@ class IntroCutsceneDestroyPatch
             bool chatVisible = Options.CurrentGameMode switch
             {
                 CustomGameMode.FFA => true,
+                CustomGameMode.CandR => CopsAndRobbersManager.CandR_ShowChatInGame.GetBool(),
                 _ => false
             };
             try
@@ -1072,6 +1106,17 @@ class IntroCutsceneDestroyPatch
         if (AmongUsClient.Instance.AmHost && GameStates.IsHideNSeek && PlayerIdentifiers.Shows(false, false))
             PlayerIdentifiers.RefreshLobby(hideAndSeek: true);
         Utils.DoNotifyRoles(NoCache: true);
+        if (AmongUsClient.Instance.AmHost && Options.CurrentGameMode == CustomGameMode.CandR)
+        {
+            // This mode has no meeting to clear the first-round role description.
+            _ = new LateTask(() =>
+            {
+                if (!context.IsCurrent() || !AmongUsClient.Instance.AmHost || !GameStates.IsInGame
+                    || GameStates.IsEnded || Options.CurrentGameMode != CustomGameMode.CandR) return;
+                CopsAndRobbersManager.IntroRoleInfoActive = false;
+                Utils.DoNotifyRoles(ForceLoop: false);
+            }, 8f, "Clear Cops and Robbers intro role info");
+        }
         Logger.Info("OnDestroy", "IntroCutscene");
     }
 }
