@@ -1164,6 +1164,8 @@ internal static class CopsAndRobbersManager
     {
         if (robbers.Remove(playerId))
         {
+            if (GameData.Instance != null) GameData.Instance.RecomputeTaskCounts();
+
             if (captured.ContainsKey(playerId))
             {
                 captured.Remove(playerId);
@@ -1204,7 +1206,7 @@ internal static class CopsAndRobbersManager
 
     public static string GetTeamTaskProgressText()
     {
-        if (Options.CurrentGameMode != CustomGameMode.CandR || Options.DisableTaskWin.GetBool() ||
+        if (Options.CurrentGameMode != CustomGameMode.CandR ||
             CandR_RobberTaskWinPercentage.GetFloat() >= 100f || robberTaskProgressGoal <= 0) return string.Empty;
 
         return string.Format(GetString("C&R_RobberTeamTaskProgress"), robberTaskProgressCompleted, robberTaskProgressGoal);
@@ -1212,7 +1214,7 @@ internal static class CopsAndRobbersManager
 
     private static void UpdateRobberTaskProgress()
     {
-        if (Options.DisableTaskWin.GetBool() || CandR_RobberTaskWinPercentage.GetFloat() >= 100f || GameData.Instance == null) return;
+        if (CandR_RobberTaskWinPercentage.GetFloat() >= 100f || GameData.Instance == null) return;
 
         int totalTasks = GameData.Instance.TotalTasks;
         int completedTasks = totalTasks > 0 ? GameData.Instance.CompletedTasks : 0;

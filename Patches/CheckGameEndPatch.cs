@@ -792,17 +792,17 @@ class CandRGameEndPredicate : GameEndPredicate
     public override bool CheckGameEndByTask(out GameOverReason reason)
     {
         reason = GameOverReason.ImpostorsByKill;
-        if (Options.DisableTaskWin.GetBool() || TaskState.InitialTotalTasks <= 0 || GameData.Instance.TotalTasks <= 0)
-            return false;
+        var gameData = GameData.Instance;
+        if (gameData == null) return false;
 
-        int requiredTasks = CopsAndRobbersManager.GetRobberTaskWinGoal(GameData.Instance.TotalTasks);
-        if (GameData.Instance.CompletedTasks < requiredTasks)
+        int requiredTasks = CopsAndRobbersManager.GetRobberTaskWinGoal(gameData.TotalTasks);
+        if (requiredTasks == 0 || gameData.CompletedTasks < requiredTasks)
             return false;
 
         reason = GameOverReason.CrewmatesByTask;
         ResetAndSetWinner(CustomWinner.Robbers);
         WinnerIds = [.. CopsAndRobbersManager.robbers];
-        Logger.Info($"Game ended because the robbers completed the task goal ({GameData.Instance.CompletedTasks}/{requiredTasks})", "C&R");
+        Logger.Info($"Game ended because the robbers completed the task goal ({gameData.CompletedTasks}/{requiredTasks})", "C&R");
         return true;
     }
 }
