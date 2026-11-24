@@ -13,10 +13,14 @@ internal static class OfficialChat
 {
     private static readonly object TransactionLock = new();
     private const int SoftPacketBytes = 1000;
-    private const int HardPacketBytes = 1200;
-    // A transparent glyph contributes to TMP's rendered bounds; a bare trailing newline does not.
-    private const string PageFooter = "\n<color=#00000000>.</color>";
+    private const int HardPacketBytes = OfficialPacketCodec.HardLimit;
+    private const float ChatTitleBodyGap = 0.233f;
+    // Vanilla waits for an empty bubble name to be filled. A zero-width space keeps the heading invisible.
+    private const string HiddenHeading = "\u200B";
+    // Reserve enough height below the visible text and hide vanilla's appended color name.
+    private const string PageFooter = "\n\n<#0000>.";
     internal readonly record struct SentPage(byte SpeakerId, PlayerControl Recipient, string Heading, string Text);
+    private readonly record struct RestoredName(PlayerControl Player, string Name, int ByteCount);
     internal static PlayerControl DisplayActor { get; private set; }
     internal static string DisplayTitle { get; private set; }
 
@@ -44,20 +48,20 @@ internal static class OfficialChat
         lock (TransactionLock)
         {
             string senderName = actor.Data.PlayerName;
-            title ??= senderName;
+            title = ChatRichText.Compact(title ?? senderName, "OfficialChat.Title");
+            text = ChatRichText.Compact(text, "OfficialChat.Body");
+            string titlePadding = null;
             byte speakerId = actor.PlayerId;
+            var connectedPlayers = Main.AllPlayerControls.Where(p => p?.Data != null && !p.Data.Disconnected)
+                .OrderBy(p => p.PlayerId).ToArray();
             // System messages need a living actor. Player chat uses the actual speaker.
             if (!preserveDeadActor)
-                actor = Main.AllPlayerControls.Where(p => p?.Data != null && !p.Data.Disconnected && !p.Data.IsDead)
-                    .OrderBy(p => p.PlayerId).FirstOrDefault(p => p == actor)
-                    ?? Main.AllPlayerControls.Where(p => p?.Data != null && !p.Data.Disconnected && !p.Data.IsDead)
-                        .OrderBy(p => p.PlayerId).FirstOrDefault() ?? actor;
-            var carrier = Main.AllPlayerControls.Where(p => p?.Data != null && !p.Data.Disconnected && p != actor)
-                .OrderBy(p => p.PlayerId).FirstOrDefault() ?? actor;
+                actor = connectedPlayers.FirstOrDefault(p => p == actor && !p.Data.IsDead)
+                    ?? connectedPlayers.FirstOrDefault(p => !p.Data.IsDead) ?? actor;
             var context = OfficialSessionContext.Capture();
             bool Current() => context.IsCurrent() && client.AmHost;
 
-            foreach (var seer in (recipients ?? Main.AllPlayerControls).Where(p => p?.Data != null && !p.Data.Disconnected
+            foreach (var seer in (recipients ?? connectedPlayers).Where(p => p?.Data != null && !p.Data.Disconnected
                 && (recipient == byte.MaxValue || p.PlayerId == recipient)).OrderBy(p => p.PlayerId))
             {
                 if (!Current()) return sentPages.ToArray();
@@ -74,7 +78,7 @@ internal static class OfficialChat
                 {
                     try
                     {
-                        var (modHeading, modPages) = LocalPages(text ?? string.Empty, title, includeTitleInBudget: privateTransport);
+                        var (modHeading, _, modPages) = LocalPages(text, title, includeTitleInBudget: privateTransport);
                         if (privateTransport)
                         {
                             // Use the same SystemChat envelope inside a server-targeted
@@ -105,8 +109,8 @@ internal static class OfficialChat
                         CustomRpcTransport.SendPayload(CustomRPC.SystemChat, writer =>
                         {
                             writer.Write(actor.PlayerId);
-                            writer.Write(title ?? string.Empty);
-                            writer.Write(text ?? string.Empty);
+                            writer.Write(title);
+                            writer.Write(text);
                         }, target);
                         foreach (var page in modPages)
                             sentPages.Add(new(speakerId, seer, modHeading, page));
@@ -119,60 +123,67 @@ internal static class OfficialChat
                     }
                     continue;
                 }
-                string actorRestore = VisibleName(actor, seer), carrierRestore = VisibleName(carrier, seer);
-                string heading = title ?? string.Empty, body = text ?? string.Empty;
+                string heading = NonEmptyName(title), body = text;
                 try
                 {
+                    var (senderNameToRestore, carrierNameToRestore) = SelectVanillaActors(actor, connectedPlayers, seer, preserveDeadActor);
+                    var (sender, actorRestore, actorRestoreBytes) = senderNameToRestore;
+                    var (carrier, carrierRestore, carrierRestoreBytes) = carrierNameToRestore;
                     // Preflight bounded names before creating a Hazel buffer. Large headings become body text.
                     int inputNameBytes = Encoding.UTF8.GetByteCount(heading);
-                    int actorRestoreBytes = Encoding.UTF8.GetByteCount(actorRestore);
-                    int carrierRestoreBytes = Encoding.UTF8.GetByteCount(carrierRestore);
                     int textBytes = Encoding.UTF8.GetByteCount(body);
                     if (actorRestoreBytes > HardPacketBytes || carrierRestoreBytes > HardPacketBytes)
                         throw new InvalidOperationException("The recipient name restoration exceeds the packet budget.");
                     if (inputNameBytes > 256)
                     {
                         body = heading + "\n" + body;
-                        heading = "TOHE";
+                        heading = HiddenHeading;
                     }
-                    string padding = TitlePadding(heading);
-                    // An empty-body transaction measures the actual reliable header, target,
-                    // name changes, QuickChat payload, and both name restorations.
-                    int available;
-                    using (var baseline = BuildTransaction(actor, carrier, target, heading, padding + PageFooter, actorRestore, carrierRestore))
-                        available = HardPacketBytes - baseline.Writer.Length;
-                    if (available <= 0) throw new InvalidOperationException("The name restoration leaves no message budget.");
+                    // Use one byte per SetName field to measure framing without serializing empty or oversized names.
+                    const string probeName = "x";
+                    int nameFieldCount = sender == carrier ? 2 : 4;
+                    int remaining;
+                    using (var baseline = BuildTransaction(sender, carrier, target, probeName, probeName, probeName, probeName))
+                        remaining = HardPacketBytes - baseline.Writer.Length + nameFieldCount;
+                    remaining -= StringBytesBeyondEmpty(carrierRestoreBytes);
+                    if (sender != carrier) remaining -= StringBytesBeyondEmpty(actorRestoreBytes);
 
-                    // Hazel's string length prefix can grow as the body grows. Measure that
-                    // change with the same writer serializer before setting the page limit.
-                    var probe = MessageWriter.Get(SendOption.Reliable);
-                    try
+                    (string Padding, int Limit, string[] Pages) PreparePages(string pageHeading, string pageBody)
                     {
-                        int start = probe.Length;
-                        probe.Write(padding + PageFooter);
-                        int paddedStringLength = probe.Length - start;
-                        probe.Clear(SendOption.Reliable);
-                        start = probe.Length;
-                        probe.Write(padding + new string('A', available) + PageFooter);
-                        int prefixGrowth = (probe.Length - start) - paddedStringLength - available;
-                        available -= prefixGrowth;
+                        string pagePadding = pageHeading == title ? (titlePadding ??= TitlePadding(title)) : string.Empty;
+                        int limit = remaining;
+                        if (sender != carrier) limit -= StringBytesBeyondEmpty(Encoding.UTF8.GetByteCount(pageHeading));
+                        // The empty-string prefix is already in the baseline. A body of 128 bytes or more needs another byte.
+                        if (limit >= 128) limit--;
+                        limit -= Encoding.UTF8.GetByteCount(pagePadding + PageFooter);
+                        return (pagePadding, limit, TryPaginate(pageBody, limit));
                     }
-                    finally { probe.Recycle(); }
-                    if (available <= 0) throw new InvalidOperationException("The name restoration leaves no message budget.");
+
+                    var (padding, available, pages) = PreparePages(heading, body);
+                    if (pages == null && !preserveDeadActor)
+                    {
+                        // Keep the content readable when the title or paired tags cannot fit beside the restored names.
+                        body = body.RemoveHtmlTags();
+                        string plainHeading = heading.RemoveHtmlTags();
+                        if (heading != HiddenHeading && !string.IsNullOrWhiteSpace(plainHeading))
+                            body = plainHeading + "\n" + body;
+                        heading = HiddenHeading;
+                        (padding, available, pages) = PreparePages(heading, body);
+                    }
+                    if (pages == null)
+                        throw new InvalidOperationException("The name restoration leaves too little room for the message.");
+
                     Logger.Info($"recipient={seer.PlayerId}, inputNameUtf8Bytes={inputNameBytes}, " +
-                        $"setHeadingUtf8Bytes={(actor == carrier ? 0 : Encoding.UTF8.GetByteCount(heading))}, " +
+                        $"setHeadingUtf8Bytes={(sender == carrier ? 0 : Encoding.UTF8.GetByteCount(heading))}, " +
                         $"actorRestoreUtf8Bytes={actorRestoreBytes}, carrierRestoreUtf8Bytes={carrierRestoreBytes}, " +
                         $"textUtf8Bytes={textBytes}, paginatedBodyUtf8Bytes={Encoding.UTF8.GetByteCount(body)}, " +
-                        $"pageLimitUtf8Bytes={available}", "OfficialChat.Pagination");
-                    // Materialize all pages before sending so a later invalid token cannot leave
-                    // a partially delivered message. Padding is repeated, outside the rich text.
-                    var pages = Paginate(body, available).ToArray();
+                        $"pageLimitUtf8Bytes={available}, sender={sender.PlayerId}, carrier={carrier.PlayerId}", "OfficialChat.Pagination");
                     Logger.Info($"recipient={seer.PlayerId}, pageCount={pages.Length}", "OfficialChat.Pagination");
                     int pageIndex = 0;
                     foreach (string page in pages)
                     {
                         if (!Current()) return sentPages.ToArray();
-                        using var packet = BuildTransaction(actor, carrier, target, heading, padding + page + PageFooter, actorRestore, carrierRestore);
+                        using var packet = BuildTransaction(sender, carrier, target, heading, padding + page + PageFooter, actorRestore, carrierRestore);
                         if (packet.Writer.Length > HardPacketBytes)
                             throw new InvalidOperationException("The complete chat transaction exceeds 1200 bytes.");
                         Logger.Info($"recipient={seer.PlayerId}, page={++pageIndex}/{pages.Length}, " +
@@ -180,7 +191,7 @@ internal static class OfficialChat
                             $"packetBytes={packet.Writer.Length}", "OfficialChat.Pagination");
                         if (send == null) OfficialNetworkSend.Send(client, packet.Writer);
                         else send(packet.Writer);
-                        sentPages.Add(new(speakerId, seer, heading, page));
+                        sentPages.Add(new(sender.PlayerId, seer, heading, page));
                     }
                 }
                 catch (Exception error)
@@ -192,6 +203,27 @@ internal static class OfficialChat
             }
         }
         return sentPages.ToArray();
+    }
+
+    private static (RestoredName Sender, RestoredName Carrier) SelectVanillaActors(PlayerControl actor,
+        PlayerControl[] connectedPlayers, PlayerControl seer, bool preserveDeadActor)
+    {
+        RestoredName PrepareRestore(PlayerControl player)
+        {
+            string name = NonEmptyName(ChatRichText.Compact(VisibleName(player, seer),
+                $"OfficialChat.RestoreCandidate, player={player.PlayerId}, recipient={seer.PlayerId}"));
+            return new(player, name, Encoding.UTF8.GetByteCount(name));
+        }
+
+        if (preserveDeadActor)
+            return (PrepareRestore(actor), PrepareRestore(connectedPlayers.FirstOrDefault(p => p != actor) ?? actor));
+
+        // In-game names can vary per recipient. Rank the compressed strings that will be written to the packet.
+        var byRestoreSize = connectedPlayers.Select(PrepareRestore).OrderBy(p => p.ByteCount).ToArray();
+        var sender = byRestoreSize.FirstOrDefault(p => !p.Player.Data.IsDead);
+        if (sender.Player == null) sender = PrepareRestore(actor);
+        var carrier = byRestoreSize.FirstOrDefault(p => p.Player != sender.Player);
+        return (sender, carrier.Player == null ? sender : carrier);
     }
 
     internal static string VisibleName(PlayerControl actor, PlayerControl seer)
@@ -211,8 +243,7 @@ internal static class OfficialChat
         bool showDeadSpeaker = false;
         try
         {
-            var (heading, pages) = LocalPages(text, title, includeTitlePadding: !textHasNamePadding);
-            string padding = textHasNamePadding ? string.Empty : TitlePadding(heading);
+            var (heading, padding, pages) = LocalPages(text, title, includeTitlePadding: !textHasNamePadding);
             showDeadSpeaker = allowDeadSpeaker && actor.Data.IsDead && PlayerControl.LocalPlayer?.Data != null
                 && !PlayerControl.LocalPlayer.Data.IsDead;
             // Override only the bubble's name at the native presentation boundary. Player data,
@@ -238,25 +269,46 @@ internal static class OfficialChat
         }
     }
 
-    private static (string Heading, string[] Pages) LocalPages(string text, string title, bool includeTitlePadding = true,
+    private static (string Heading, string Padding, string[] Pages) LocalPages(string text, string title, bool includeTitlePadding = true,
         bool includeTitleInBudget = false)
     {
         if (Encoding.UTF8.GetByteCount(title) > 256)
         {
             text = title + "\n" + text;
-            title = "TOHE";
+            title = string.Empty;
         }
         string padding = includeTitlePadding ? TitlePadding(title) : string.Empty;
         int available = SoftPacketBytes - Encoding.UTF8.GetByteCount(padding + PageFooter);
         if (includeTitleInBudget) available -= Encoding.UTF8.GetByteCount(title);
-        var pages = Paginate(text, available).ToArray();
-        return (title, pages);
+        return (title, padding, Paginate(text, available));
     }
 
-    // Vanilla positions the body at a fixed Y even though its background includes the full
-    // name height. Reserve body lines for explicit multi-line tags/names on both client types.
+    // Hazel prefixes UTF-8 strings with their packed byte count. Bounded packet strings use at most two prefix bytes.
+    private static int StringBytesBeyondEmpty(int utf8Bytes) => utf8Bytes + (utf8Bytes >= 128 ? 1 : 0);
+
+    // Both sides of the native ChatBubble place NameText at Y=.358 and TextArea at Y=.125.
+    // Measure with the stock width and fonts so wrapped or tall headings get enough room.
     private static string TitlePadding(string title)
-        => new('\n', Regex.Matches(title ?? string.Empty, @"\n|<br\s*/?>", RegexOptions.IgnoreCase).Count);
+    {
+        if (string.IsNullOrEmpty(title) || title == HiddenHeading) return string.Empty;
+
+        int lines = Regex.Matches(title, @"\n|<br\s*/?>", RegexOptions.IgnoreCase).Count;
+        var prefab = DestroyableSingleton<HudManager>.Instance?.Chat?.chatBubblePool?.Prefab?.TryCast<ChatBubble>();
+        if (prefab?.NameText == null || prefab.TextArea == null) return new('\n', lines);
+
+        var name = prefab.NameText;
+        float height = name.GetPreferredValues(title, name.rectTransform.rect.width, float.PositiveInfinity).y;
+        if (!float.IsFinite(height) || height <= ChatTitleBodyGap) return new('\n', lines);
+
+        var body = prefab.TextArea;
+        float width = body.rectTransform.rect.width;
+        float lineHeight = body.GetPreferredValues(".\n.", width, float.PositiveInfinity).y
+            - body.GetPreferredValues(".", width, float.PositiveInfinity).y;
+        if (lineHeight <= 0f || !float.IsFinite(lineHeight)) return new('\n', lines);
+
+        int measuredLines = (int)MathF.Min(HardPacketBytes, MathF.Ceiling((height - ChatTitleBodyGap) / lineHeight));
+        return new('\n', Math.Max(lines, measuredLines));
+    }
 
     private static OfficialPacketBuilder.BoundedWriter BuildTransaction(PlayerControl actor, PlayerControl carrier, int target, string heading,
         string body, string actorRestore, string carrierRestore)
@@ -285,27 +337,38 @@ internal static class OfficialChat
         catch { owner.Dispose(); throw; }
     }
 
-    private static void WriteName(MessageWriter writer, PlayerControl player, string name)
+    private static string NonEmptyName(string name) => string.IsNullOrEmpty(name) ? HiddenHeading : name;
+
+    internal static void WriteName(MessageWriter writer, PlayerControl player, string name)
     {
         writer.StartMessage(2);
         writer.WritePacked(player.NetId);
         writer.Write((byte)RpcCalls.SetName);
         writer.Write(player.Data.NetId);
-        writer.Write(name);
+        writer.Write(NonEmptyName(name));
         writer.EndMessage();
     }
 
-    // Keep grapheme clusters intact, and close/reopen paired TMP tags at page boundaries.
-    internal static IEnumerable<string> Paginate(string text, int maxUtf8Bytes)
+    internal static string[] Paginate(string text, int maxUtf8Bytes)
+        => TryPaginate(text, maxUtf8Bytes)
+            ?? throw new InvalidOperationException("A text element or rich text tag exceeds the chat budget.");
+
+    // Keep grapheme clusters and paired TMP tags intact. A null result means no complete set of pages fits.
+    private static string[] TryPaginate(string text, int maxUtf8Bytes)
     {
+        if (maxUtf8Bytes < 0) return null;
         var active = new List<(string Name, string Open)>();
+        var pages = new List<string>();
         var page = new StringBuilder();
         bool hasContent = false;
         foreach (string token in Tokens(text ?? string.Empty))
         {
             var next = new List<(string Name, string Open)>(active);
-            var tag = Regex.Match(token, @"^<(/?)([a-zA-Z-]+)(?:[ =][^<>]*)?>$");
-            bool shorthandColor = Regex.IsMatch(token, @"^<#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?>$");
+            bool literal = active.Count > 0 && active[^1].Name == "noparse";
+            var tag = !literal || token.Equals("</noparse>", StringComparison.OrdinalIgnoreCase)
+                ? Regex.Match(token, @"^<(/?)([a-zA-Z-]+)(?:[ =][^<>]*)?>$")
+                : Match.Empty;
+            bool shorthandColor = !literal && ChatRichText.IsShorthandColor(token);
             if (shorthandColor) next.Add(("color", token));
             else if (tag.Success)
             {
@@ -317,25 +380,26 @@ internal static class OfficialChat
                 }
                 else if (name is "b" or "i" or "u" or "s" or "color" or "size" or "align" or "font"
                     or "mark" or "link" or "sub" or "sup" or "voffset" or "cspace" or "mspace" or "line-height"
-                    or "indent" or "line-indent" or "margin" or "style" or "nobr") next.Add((name, token));
+                    or "indent" or "line-indent" or "margin" or "style" or "nobr" or "noparse" or "allcaps") next.Add((name, token));
             }
             string close = string.Concat(next.AsEnumerable().Reverse().Select(t => $"</{t.Name}>"));
             if (Encoding.UTF8.GetByteCount(page.ToString() + token + close) > maxUtf8Bytes)
             {
-                if (!hasContent) throw new InvalidOperationException("A text element or rich text tag exceeds the chat budget.");
-                yield return page + string.Concat(active.AsEnumerable().Reverse().Select(t => $"</{t.Name}>"));
+                if (!hasContent) return null;
+                pages.Add(page + string.Concat(active.AsEnumerable().Reverse().Select(t => $"</{t.Name}>")));
                 page.Clear();
                 foreach (var open in active) page.Append(open.Open);
                 hasContent = false;
                 if (Encoding.UTF8.GetByteCount(page.ToString() + token + close) > maxUtf8Bytes)
-                    throw new InvalidOperationException("A text element or rich text tag exceeds the chat budget.");
+                    return null;
             }
             page.Append(token);
             active = next;
             hasContent |= !tag.Success && !shorthandColor;
         }
         if (page.Length != 0 || string.IsNullOrEmpty(text))
-            yield return page + string.Concat(active.AsEnumerable().Reverse().Select(t => $"</{t.Name}>"));
+            pages.Add(page + string.Concat(active.AsEnumerable().Reverse().Select(t => $"</{t.Name}>")));
+        return pages.ToArray();
     }
 
     private static IEnumerable<string> Tokens(string text)

@@ -222,13 +222,15 @@ namespace TOHE.Modules.ChatManager
 
             int target = seer.GetClientId();
             if (target < 0) return;
+            string title = ChatRichText.Compact(entry.Title, $"Replay.Title, player={actor.PlayerId}, recipient={seer.PlayerId}");
+            string body = ChatRichText.Compact(entry.Text, $"Replay.Body, player={actor.PlayerId}, recipient={seer.PlayerId}");
             if (seer.IsModded())
             {
                 CustomRpcTransport.SendPayload(CustomRPC.ReplayPlayerChat, writer =>
                 {
                     writer.Write(quickChat);
                     writer.Write(actor.PlayerId);
-                    writer.Write(entry.Title);
+                    writer.Write(title);
                     writer.Write(entry.TextHasNamePadding);
                     if (quickChat)
                     {
@@ -238,10 +240,11 @@ namespace TOHE.Modules.ChatManager
                         foreach (var name in entry.ReferencedNames)
                         {
                             writer.Write(name.PlayerId);
-                            writer.Write(name.Name);
+                            writer.Write(ChatRichText.Compact(name.Name,
+                                $"Replay.ReferencedName, player={name.PlayerId}, recipient={seer.PlayerId}"));
                         }
                     }
-                    else writer.Write(entry.Text);
+                    else writer.Write(body);
                 }, target);
                 return;
             }
@@ -251,23 +254,27 @@ namespace TOHE.Modules.ChatManager
             writer.StartMessage(6);
             writer.Write(AmongUsClient.Instance.GameId);
             writer.WritePacked(target);
-            string currentName = OfficialChat.VisibleName(actor, seer);
-            bool rename = entry.Title != currentName;
-            if (rename) WriteName(writer, actor, entry.Title);
+            string currentName = ChatRichText.Compact(OfficialChat.VisibleName(actor, seer),
+                $"Replay.RestoreName, player={actor.PlayerId}, recipient={seer.PlayerId}");
+            bool rename = title != currentName;
+            if (rename) OfficialChat.WriteName(writer, actor, title);
             var referenced = entry.ReferencedNames.Select(name => (Name: name, Player: name.PlayerId.GetPlayer()))
                 .Where(item => item.Player?.Data != null && !item.Player.Data.Disconnected)
-                .Select(item => (item.Player, item.Name.Name, Current: OfficialChat.VisibleName(item.Player, seer))).ToArray();
+                .Select(item => (item.Player,
+                    Name: ChatRichText.Compact(item.Name.Name, $"Replay.ReferencedName, player={item.Player.PlayerId}, recipient={seer.PlayerId}"),
+                    Current: ChatRichText.Compact(OfficialChat.VisibleName(item.Player, seer),
+                        $"Replay.RestoreName, player={item.Player.PlayerId}, recipient={seer.PlayerId}"))).ToArray();
             foreach (var item in referenced)
-                if (item.Player != actor && item.Name != item.Current) WriteName(writer, item.Player, item.Name);
+                if (item.Player != actor && item.Name != item.Current) OfficialChat.WriteName(writer, item.Player, item.Name);
             writer.StartMessage(2);
             writer.WritePacked(actor.NetId);
             writer.Write((byte)(quickChat ? RpcCalls.SendQuickChat : RpcCalls.SendChat));
             if (quickChat) writer.Write(new Il2CppStructArray<byte>(entry.QuickChatPayload));
-            else writer.Write(entry.Text);
+            else writer.Write(body);
             writer.EndMessage();
             foreach (var item in referenced)
-                if (item.Player != actor && item.Name != item.Current) WriteName(writer, item.Player, item.Current);
-            if (rename) WriteName(writer, actor, currentName);
+                if (item.Player != actor && item.Name != item.Current) OfficialChat.WriteName(writer, item.Player, item.Current);
+            if (rename) OfficialChat.WriteName(writer, actor, currentName);
             writer.EndMessage();
             if (writer.Length > OfficialPacketCodec.HardLimit)
             {
@@ -300,15 +307,6 @@ namespace TOHE.Modules.ChatManager
             }
         }
 
-        private static void WriteName(MessageWriter writer, PlayerControl player, string name)
-        {
-            writer.StartMessage(2);
-            writer.WritePacked(player.NetId);
-            writer.Write((byte)RpcCalls.SetName);
-            writer.Write(player.Data.NetId);
-            writer.Write(name);
-            writer.EndMessage();
-        }
         public static bool CheckCommond(ref string msg, string command, bool exact = true)
         {
             var comList = command.Split('|');

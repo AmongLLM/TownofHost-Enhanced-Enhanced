@@ -1037,7 +1037,7 @@ public static class Utils
         if (EndGamePatch.KillLog != "")
         {
             string kl = EndGamePatch.KillLog;
-            kl = Options.OldKillLog.GetBool() ? kl.RemoveHtmlTags() : kl.Replace("<color=", "<");
+            kl = Options.OldKillLog.GetBool() ? kl.RemoveHtmlTags() : ChatRichText.Compact(kl, "KillLog.Body");
             var tytul = !Options.OldKillLog.GetBool() ? ColorString(new Color32(102, 16, 16, 255), "《 " + GetString("KillLog") + " 》") : "";
             SendSpesificMessage(kl, PlayerId, tytul);
         }
@@ -1541,7 +1541,7 @@ public static class Utils
             else title = "\u27a1" + title.Replace("\u2605", "") + "\u2b05";
         }
 
-        if (!OfficialAnticheatPolicy.Enabled) text = text.Replace("color=", string.Empty);
+        if (!OfficialAnticheatPolicy.Enabled) text = ChatRichText.Compact(text, "QueuedChat.Body");
 
         try
         {
