@@ -396,6 +396,8 @@ public static class Options
     public static OptionItem EveryoneCanSeeDeathReason;
 
     public static OptionItem KillFlashDuration;
+    public static OptionItem UniqueNeutralRevealScreen;
+
 
     // Ghost
     public static OptionItem GhostIgnoreTasks;
@@ -1874,6 +1876,10 @@ public static class Options
             .SetColor(new Color32(193, 255, 209, byte.MaxValue))
             .SetValueFormat(OptionFormat.Seconds)
             .SetGameMode(CustomGameMode.Standard);
+
+        UniqueNeutralRevealScreen = BooleanOptionItem.Create(60792, "UniqueNeutralRevealScreen", false, TabGroup.ModSettings, false)
+            .SetGameMode(CustomGameMode.Standard)
+            .SetColor(new Color32(193, 255, 209, byte.MaxValue));
         // 幽灵相关设定
         TextOptionItem.Create(10000032, "MenuTitle.Ghost", TabGroup.ModSettings)
             .SetGameMode(CustomGameMode.Standard)
