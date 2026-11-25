@@ -2461,6 +2461,7 @@ public static class Utils
         if (Options.AirshipVariableElectrical.GetBool())
             AirshipElectricalDoors.Initialize();
 
+        RPC.SyncDeadPassedMeetingList();
         DoorsReset.ResetDoors();
 
         // Empty Deden bug support Empty vent after meeting

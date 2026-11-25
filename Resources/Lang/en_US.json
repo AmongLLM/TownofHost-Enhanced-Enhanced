@@ -1238,6 +1238,7 @@
   "FixKillCooldownValue": "Starting Kill Cooldown",
   "OverclockedReduction": "Kill Cooldown Reduction",
   "GhostCanSeeOtherRoles": "Ghosts Can See Other Roles",
+  "PreventSeeRolesImmediatelyAfterDeath": "Prevent seeing other's roles immediately after death",
   "GhostCanSeeOtherVotes": "Ghosts Can See Vote Colors",
   "GhostCanSeeDeathReason": "Ghost Can See Cause Of Death",
   "GhostIgnoreTasks": "Ghosts Exempt From Tasks",
@@ -4301,5 +4302,6 @@
   "ChiefOfPolice": "Police Commissioner",
   "SpeedBooster": "Speed Booster",
   "NotAssigned": "Not Assigned",
-  "CoinflipCommandInfo": "<b>This Command can only be used when in the lobby or after you die.</b>"
+  "CoinflipCommandInfo": "<b>This Command can only be used when in the lobby or after you die.</b>",
+  "PreventSeeRolesBeforeSkillUsedUp": "Prevent seeing others roles before skill used up"
 }

@@ -23,6 +23,7 @@ internal class Retributionist : RoleBase
     private static OptionItem RetributionistCanKillNum;
     private static OptionItem MinimumPlayersAliveToRetri;
     private static OptionItem CanOnlyRetributeWithTasksDone;
+    private static OptionItem PreventSeeRolesBeforeSkillUsedUp;
 
     private static readonly Dictionary<byte, int> RetributionistRevenged = [];
 
@@ -32,6 +33,8 @@ internal class Retributionist : RoleBase
         RetributionistCanKillNum = IntegerOptionItem.Create(Id + 10, "RetributionistCanKillNum", new(1, 15, 1), 1, TabGroup.CrewmateRoles, false)
             .SetParent(CustomRoleSpawnChances[CustomRoles.Retributionist])
             .SetValueFormat(OptionFormat.Players);
+        PreventSeeRolesBeforeSkillUsedUp = BooleanOptionItem.Create(Id + 14, "PreventSeeRolesBeforeSkillUsedUp", true, TabGroup.ImpostorRoles, false)
+            .SetParent(CustomRoleSpawnChances[CustomRoles.Retributionist]);
         MinimumPlayersAliveToRetri = IntegerOptionItem.Create(Id + 11, "MinimumPlayersAliveToRetri", new(0, 15, 1), 5, TabGroup.CrewmateRoles, false)
             .SetParent(CustomRoleSpawnChances[CustomRoles.Retributionist])
             .SetValueFormat(OptionFormat.Players);
@@ -49,7 +52,13 @@ internal class Retributionist : RoleBase
         playerIdList.Add(playerId);
         RetributionistRevenged[playerId] = 0;
     }
-
+    public static bool PreventKnowRole(PlayerControl seer)
+    {
+        if (!seer.Is(CustomRoles.Retributionist) || seer.IsAlive()) return false;
+        if (PreventSeeRolesBeforeSkillUsedUp.GetBool() && RetributionistRevenged.TryGetValue(seer.PlayerId, out var killNum) && killNum < RetributionistCanKillNum.GetInt())
+            return true;
+        return false;
+    }
     public override string GetMark(PlayerControl seer, PlayerControl seen = null, bool isForMeeting = false)
     {
         seen ??= seer;
@@ -97,9 +106,10 @@ internal class Retributionist : RoleBase
 
         if (msg == "/ret")
         {
+            bool canSeeRoles = PreventSeeRolesBeforeSkillUsedUp.GetBool();
             string text = GetString("PlayerIdList");
             foreach (var npc in Main.AllAlivePlayerControls)
-                text += "\n" + npc.PlayerId.ToString() + " → (" + npc.GetDisplayRoleAndSubName(npc, false) + ") " + npc.GetRealName();
+                text += $"\n{npc.PlayerId} → " + (canSeeRoles ? $"({npc.GetDisplayRoleAndSubName(npc, false, false)}) " : string.Empty) + npc.GetRealName();
             SendMessage(text, pc.PlayerId);
             return true;
         }

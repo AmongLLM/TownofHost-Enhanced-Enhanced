@@ -133,6 +133,7 @@ enum CustomRPC : uint
     RequestOptionChunks,
     SyncCandRData = 202,
     SyncSpeedrunData = 203,
+    SyncDeadPassedMeetingList,
 }
 public enum Sounds
 {
@@ -819,6 +820,12 @@ internal class RPCHandlerPatch
             case CustomRPC.SyncAfkState:
                 AfkMonitor.ReceiveState(__instance, reader);
                 break;
+            case CustomRPC.SyncDeadPassedMeetingList:
+                Main.DeadPassedMeetingPlayers.Clear();
+                var pnum = reader.ReadPackedInt32();
+                for (int i = 0; i < pnum; i++)
+                    Main.DeadPassedMeetingPlayers.Add(reader.ReadByte());
+                break;
         }
     }
 
@@ -1126,6 +1133,17 @@ internal static class RPC
         foreach (var lp in Main.LoversPlayers)
         {
             writer.Write(lp.PlayerId);
+        }
+        CustomRpcTransport.Finish(writer);
+    }
+    public static void SyncDeadPassedMeetingList()
+    {
+        if (!AmongUsClient.Instance.AmHost) return;
+        MessageWriter writer = CustomRpcTransport.Start(CustomRPC.SyncDeadPassedMeetingList, SendOption.Reliable, -1);
+        writer.WritePacked(Main.DeadPassedMeetingPlayers.Count);
+        foreach (var dead in Main.DeadPassedMeetingPlayers)
+        {
+            writer.Write(dead);
         }
         CustomRpcTransport.Finish(writer);
     }
