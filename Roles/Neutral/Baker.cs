@@ -202,6 +202,7 @@ internal class Baker : RoleBase
         var baker = _Player;
         if (baker == null || !baker.Is(CustomRoles.Baker) || !BreadList[baker.PlayerId].Remove(deadPlayer.PlayerId)) return;
 
+        Logger.Info($"{deadPlayer.GetNameWithRole()} died, remove them from BreadList", "Baker");
         SendRPC(BreadSync.RemoveBread, baker, deadPlayer.PlayerId);
         if (RegenBread.GetBool() && !CanUseAbility && baker.IsAlive())
         {
@@ -429,9 +430,18 @@ internal class Famine : RoleBase
     }
     public override void OnCheckForEndVoting(PlayerState.DeathReason deathReason, params byte[] exileIds)
     {
+        Logger.Info("Starting OnCheckForEndVoting", "Famine");
         var famine = _Player;
-        if (Baker.StarvedNonBreaded || famine == null || !famine.IsAlive() || exileIds.Contains(famine.PlayerId)
-            || Main.AfterMeetingDeathPlayers.ContainsKey(famine.PlayerId)) return;
+        if (Baker.StarvedNonBreaded || famine == null) return;
+
+        Logger.Info("Checking if Baker alive", "Famine");
+        if (!famine.IsAlive())
+        {
+            Logger.Info("Baker dead", "Famine");
+            return;
+        }
+        Logger.Info("Baker Alive", "Famine");
+        if (exileIds.Contains(famine.PlayerId) || Main.AfterMeetingDeathPlayers.ContainsKey(famine.PlayerId)) return;
 
         var deathList = new List<byte>();
         foreach (var pc in Main.AllAlivePlayerControls)
@@ -439,11 +449,13 @@ internal class Famine : RoleBase
             if (pc.IsNeutralApocalypse() || Baker.HasBread(famine.PlayerId, pc.PlayerId)
                 || Main.AfterMeetingDeathPlayers.ContainsKey(pc.PlayerId)) continue;
 
+            Logger.Info($"{famine.GetRealName()} starving {pc.GetRealName()} because they had no bread", "Famine");
             pc.SetRealKiller(famine);
             deathList.Add(pc.PlayerId);
         }
         CheckForEndVotingPatch.TryAddAfterMeetingDeathPlayers(PlayerState.DeathReason.Starved, [.. deathList]);
         if (Baker.BreadList.TryGetValue(famine.PlayerId, out var bread)) bread.Clear();
         Baker.StarvedNonBreaded = true;
+        Logger.Info("Ended OnCheckForEndVoting", "Famine");
     }
 }
