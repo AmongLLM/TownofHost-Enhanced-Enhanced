@@ -135,6 +135,7 @@ class HudManagerPatch
                 }
 
                 __instance.ImpostorVentButton.ToggleVisible(player.CanUseImpostorVentButton());
+                if (Options.CurrentGameMode == CustomGameMode.Speedrun) __instance.ReportButton.Hide();
                 player.Data.Role.CanVent = player.CanUseVents();
 
                 // Sometimes sabotage button was visible for non-host modded clients
@@ -381,6 +382,7 @@ class TaskPanelBehaviourPatch
 
                     break;
                 case CustomGameMode.CandR:
+                case CustomGameMode.Speedrun:
                     var copRobberTaskLines = taskText.Split("\r\n</color>\n")[0].Split("\r\n\n")[0].Split("\r\n");
                     StringBuilder copRobberTasks = new();
                     foreach (var eachLine in copRobberTaskLines)
@@ -400,6 +402,8 @@ class TaskPanelBehaviourPatch
                     break;
             }
 
+            if (Options.CurrentGameMode == CustomGameMode.Speedrun)
+                AllText += $"\r\n\r\n<size=80%>{SpeedrunManager.GetGameState()}</size>";
             __instance.taskText.text = AllText;
         }
 

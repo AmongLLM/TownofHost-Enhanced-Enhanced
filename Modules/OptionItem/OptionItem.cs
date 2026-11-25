@@ -43,6 +43,7 @@ public abstract class OptionItem
     public CustomGameMode GameMode { get; protected set; }
     public CustomGameMode HideOptionInFFA { get; protected set; }
     public CustomGameMode HideOptionInHnS { get; protected set; }
+    public bool HiddenInSpeedrun { get; protected set; }
     public bool IsHeader { get; protected set; }
     public bool IsHidden { get; protected set; }
     public bool IsText { get; protected set; }
@@ -146,6 +147,7 @@ public abstract class OptionItem
     public OptionItem SetText(bool value) => Do(i => i.IsText = value);
     public OptionItem HideInFFA(CustomGameMode value = CustomGameMode.FFA) => Do(i => i.HideOptionInFFA = value);
     public OptionItem HideInHnS(CustomGameMode value = CustomGameMode.HidenSeekTOHE) => Do(i => i.HideOptionInHnS = value);
+    public OptionItem HideInSpeedrun() => Do(i => i.HiddenInSpeedrun = true);
 
     public OptionItem SetParent(OptionItem parent) => Do(i =>
     {
@@ -196,7 +198,11 @@ public abstract class OptionItem
     // Deprecated IsHidden function
     public virtual bool IsHiddenOn(CustomGameMode mode)
     {
-        return IsHidden || this.Parent?.IsHiddenOn(mode) == true || (HideOptionInFFA != CustomGameMode.All && HideOptionInFFA == mode) || (HideOptionInHnS != CustomGameMode.All && HideOptionInHnS == mode) || (GameMode != CustomGameMode.All && GameMode != mode);
+        return IsHidden || this.Parent?.IsHiddenOn(mode) == true
+            || (HideOptionInFFA != CustomGameMode.All && HideOptionInFFA == mode)
+            || (HideOptionInHnS != CustomGameMode.All && HideOptionInHnS == mode)
+            || (HiddenInSpeedrun && mode == CustomGameMode.Speedrun)
+            || (GameMode != CustomGameMode.All && GameMode != mode);
     }
     public string ApplyFormat(string value)
     {

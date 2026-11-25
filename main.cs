@@ -923,6 +923,7 @@ public enum CustomRoles
     JudgeTOHE = 488,
     Cop = 489,
     Robber = 490,
+    Runner = 491,
 
     // Sub-role after 500
     NotAssigned = 500,

@@ -155,6 +155,13 @@ class RandomSpawn
             }
         }
         Main.PlayerStates[player.PlayerId].HasSpawned = true;
+        if (AmongUsClient.Instance.AmHost && Options.CurrentGameMode == CustomGameMode.Speedrun
+            && SpeedrunManager.StartedAt != 0 && SpeedrunManager.Speedrun_EnablePersonalTimer.GetBool()
+            && player.IsAlive() && player.Is(CustomRoles.Runner))
+        {
+            SpeedrunManager.ResetPersonalTimer(player.PlayerId, Utils.GetTimeStamp());
+            SpeedrunManager.SyncProgress(player.PlayerId);
+        }
         if (!player.AmOwner) AntiBlackout.OnAirshipSpawn(player);
     }
     public static bool IsRandomSpawn() => RandomSpawnMode.GetBool();

@@ -1482,6 +1482,8 @@ static class ExtendedPlayerControl
     public static string GetRoleInfo(this PlayerControl player, bool InfoLong = false)
     {
         var role = player.GetCustomRole();
+        if (role == CustomRoles.Runner && SpeedrunManager.IsTaskRace)
+            return SpeedrunManager.GetTaskRaceDescription();
         if (role is CustomRoles.Crewmate or CustomRoles.Impostor)
             InfoLong = false;
 

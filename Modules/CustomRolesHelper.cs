@@ -50,6 +50,7 @@ public static class CustomRolesHelper
     {
         if (player == null) return false;
         var customRole = player.GetCustomRole();
+        if (customRole == CustomRoles.Runner) return player.CanUseKillButton();
         bool ModSideHasKillButton = customRole.GetDYRole() == RoleTypes.Impostor || customRole.GetVNRole() is CustomRoles.Impostor or CustomRoles.Shapeshifter or CustomRoles.Phantom or CustomRoles.Viper;
 
         if (player.IsModded() || (!considerVanillaShift && !player.IsModded()))
@@ -511,7 +512,7 @@ public static class CustomRolesHelper
     public static CountTypes GetCountTypes(this CustomRoles role)
        => role switch
        {
-           CustomRoles.GM => CountTypes.OutOfGame,
+           CustomRoles.GM or CustomRoles.Runner => CountTypes.OutOfGame,
            CustomRoles.Jackal => CountTypes.Jackal,
            CustomRoles.Sidekick => CountTypes.Jackal,
            CustomRoles.Doppelganger => CountTypes.Doppelganger,

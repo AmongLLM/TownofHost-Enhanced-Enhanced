@@ -26,7 +26,8 @@ class CheckTaskCompletionPatch
 {
     public static bool Prefix(ref bool __result)
     {
-        if (Options.DisableTaskWin.GetBool() || Options.NoGameEnd.GetBool() || TaskState.InitialTotalTasks == 0 || Options.CurrentGameMode == CustomGameMode.FFA)
+        if (Options.DisableTaskWin.GetBool() || Options.NoGameEnd.GetBool() || TaskState.InitialTotalTasks == 0
+            || Options.CurrentGameMode is CustomGameMode.FFA or CustomGameMode.Speedrun)
         {
             __result = false;
             return false;
@@ -106,7 +107,7 @@ class GameEndCheckerForNormal
         var reason = GameOverReason.ImpostorsByKill;
         predicate.CheckForEndGame(out reason);
 
-        if (Options.CurrentGameMode is CustomGameMode.FFA or CustomGameMode.CandR)
+        if (Options.CurrentGameMode is CustomGameMode.FFA or CustomGameMode.CandR or CustomGameMode.Speedrun)
         {
             if (WinnerIds.Count > 0 || WinnerTeam != CustomWinner.Default)
             {
@@ -507,6 +508,7 @@ class GameEndCheckerForNormal
     public static void StartEndGame(GameOverReason reason)
     {
         AntiBlackout.Reset();
+        if (Options.CurrentGameMode == CustomGameMode.Speedrun) SpeedrunManager.SyncProgress();
         // Sync of CustomWinnerHolder info
         var winnerWriter = CustomRpcTransport.Start(CustomRPC.EndGame, SendOption.Reliable);
         WriteTo(winnerWriter);
@@ -630,6 +632,7 @@ class GameEndCheckerForNormal
     public static void SetPredicateToNormal() => predicate = new NormalGameEndPredicate();
     public static void SetPredicateToFFA() => predicate = new FFAGameEndPredicate();
     public static void SetPredicateToCandR() => predicate = new CandRGameEndPredicate();
+    public static void SetPredicateToSpeedrun() => predicate = new SpeedrunGameEndPredicate();
 
 
     // ===== Check Game End =====

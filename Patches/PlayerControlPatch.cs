@@ -739,7 +739,7 @@ class ReportDeadBodyPatch
             return false;
         }
         if (Options.DisableMeeting.GetBool()) return false;
-        if (Options.CurrentGameMode is CustomGameMode.FFA or CustomGameMode.CandR) return false;
+        if (Options.CurrentGameMode is CustomGameMode.FFA or CustomGameMode.CandR or CustomGameMode.Speedrun) return false;
 
         if (!CanReport[__instance.PlayerId])
         {

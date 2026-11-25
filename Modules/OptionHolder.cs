@@ -16,6 +16,7 @@ public enum CustomGameMode
     CandR = 0x04,
 
     HidenSeekTOHE = 0x08, // Selector order is defined separately by gameModes.
+    Speedrun = 0x10,
     All = int.MaxValue
 }
 
@@ -52,6 +53,7 @@ public static class Options
             1 => CustomGameMode.FFA,
             2 => CustomGameMode.HidenSeekTOHE, // Preserve the existing H&S preset index.
             3 => CustomGameMode.CandR,
+            4 => CustomGameMode.Speedrun,
             _ => CustomGameMode.Standard
         };
 
@@ -63,6 +65,7 @@ public static class Options
 
         "Hide&SeekTOHE", // Keep the existing H&S preset index at 2.
         "C&R",
+        "Speedrun",
     ];
 
 
@@ -1181,6 +1184,7 @@ public static class Options
 
         // C&R
         CopsAndRobbersManager.SetupCustomOption();
+        SpeedrunManager.SetupCustomOption();
 
         // Hide & Seek
         TextOptionItem.Create(10000055, "MenuTitle.Hide&Seek", TabGroup.ModSettings)
@@ -1825,11 +1829,13 @@ public static class Options
         // 其它设定
         TextOptionItem.Create(10000031, "MenuTitle.Other", TabGroup.ModSettings)
             .HideInFFA()
+            .HideInSpeedrun()
             .SetColor(new Color32(193, 255, 209, byte.MaxValue));
         // 梯子摔死
         LadderDeath = BooleanOptionItem.Create(60760, "LadderDeath", false, TabGroup.ModSettings, false)
             .SetColor(new Color32(193, 255, 209, byte.MaxValue))
-            .HideInFFA();
+            .HideInFFA()
+            .HideInSpeedrun();
         LadderDeathChance = StringOptionItem.Create(60761, "LadderDeathChance", EnumHelper.GetAllNames<SpawnChance>()[1..], 0, TabGroup.ModSettings, false)
             .SetParent(LadderDeath);
 

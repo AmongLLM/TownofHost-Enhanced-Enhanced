@@ -21,7 +21,7 @@ public static class GhostRoleAssign
     public static void GhostAssignPatch(PlayerControl player)
     {
         if (GameStates.IsHideNSeek
-            || Options.CurrentGameMode == CustomGameMode.FFA
+            || Options.CurrentGameMode is CustomGameMode.FFA or CustomGameMode.Speedrun
             || player == null
             || player.Data == null
             || player.Data.Disconnected

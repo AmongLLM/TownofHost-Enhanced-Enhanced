@@ -700,7 +700,9 @@ public static class Utils
         return hasTasks;
     }
 
-    public static string GetProgressText(PlayerControl pc)
+    public static string GetProgressText(PlayerControl pc) => GetProgressText(pc, PlayerControl.LocalPlayer);
+
+    public static string GetProgressText(PlayerControl pc, PlayerControl seer)
     {
         try
         {
@@ -712,7 +714,7 @@ public static class Utils
                 if (IsActive(SystemTypes.Comms)) Comms = true;
                 if (Camouflager.AbilityActivated) Comms = true;
             }
-            return GetProgressText(pc.PlayerId, Comms);
+            return GetProgressText(pc.PlayerId, Comms, seer);
         }
         catch (Exception error)
         {
@@ -722,13 +724,22 @@ public static class Utils
         }
     }
     public static string GetProgressText(byte playerId, bool comms = false)
+        => GetProgressText(playerId, comms, PlayerControl.LocalPlayer);
+
+    private static string GetProgressText(byte playerId, bool comms, PlayerControl seer)
     {
         try
         {
             if (!Main.playerVersion.ContainsKey(AmongUsClient.Instance.HostId)) return string.Empty;
-            var ProgressText = new StringBuilder();
             var role = Main.PlayerStates[playerId].MainRole;
 
+            if (Options.CurrentGameMode == CustomGameMode.Speedrun && role == CustomRoles.Runner)
+            {
+                var progress = SpeedrunManager.GetProgressText(playerId, seer);
+                return progress.Length == 0 ? progress : " " + progress;
+            }
+
+            var ProgressText = new StringBuilder();
             if (Options.CurrentGameMode == CustomGameMode.CandR)
             {
                 ProgressText.Append(CopsAndRobbersManager.GetProgressText(playerId));
@@ -975,6 +986,14 @@ public static class Utils
         if (AmongUsClient.Instance.IsGameStarted)
         {
             SendMessage(GetString("CantUse.lastroles"), PlayerId);
+            return;
+        }
+
+        if (Options.CurrentGameMode == CustomGameMode.Speedrun)
+        {
+            var leaderboard = SpeedrunManager.GetGameState(forGameEnd: true);
+            if (sendMessage) SendMessage(leaderboard, PlayerId);
+            else Main.LastSummaryMessage = leaderboard;
             return;
         }
 
@@ -1693,6 +1712,8 @@ public static class Utils
             }
             if (Options.CurrentGameMode == CustomGameMode.FFA)
                 name = $"<color=#00ffff><size=1.7>{GetString("ModeFFA")}</size></color>\r\n" + name;
+            else if (Options.CurrentGameMode == CustomGameMode.Speedrun)
+                name = ColorString(SpeedrunManager.ModeColor, $"<size=1.7>{GetString("ModeSpeedrun")}</size>") + "\r\n" + name;
         }
 
         string modtag = hasFileTag ? fileTag : "";
@@ -2001,22 +2022,29 @@ public static class Utils
                     SeerRealName = PlayerIdentifiers.Prefix(seer.PlayerId, SeerRealName);
 
                 // ====== Combine SelfRoleName, SelfTaskText, SelfName, SelfDeathReason for seer ======
-                string SelfTaskText = GetProgressText(seer);
+                string SelfTaskText = GetProgressText(seer, seer);
 
                 string SelfRoleName = $"<size={fontSize}>{seer.GetDisplayRoleAndSubName(seer, false, isForMeeting, useShortNames: true)}{SelfTaskText}</size>";
                 string SelfDeathReason = seer.KnowDeathReason(seer) ? $"\n<size={fontSizeDeathReason}>『{ColorString(GetRoleColor(CustomRoles.Doctor), GetVitalText(seer.PlayerId))}』</size>" : string.Empty;
-                string SelfName = $"{ColorString(seer.GetRoleColor(), SeerRealName)}{SelfDeathReason}{SelfMark}";
+                var selfNameColor = SpeedrunManager.IsTaskRaceFinisher(seer.PlayerId) ? Color.green : seer.GetRoleColor();
+                string SelfName = $"{ColorString(selfNameColor, SeerRealName)}{SelfDeathReason}{SelfMark}";
 
                 // Add protected player icon from ShieldPersonDiedFirst
                 if (seer.IsShieldedFromFirstDeath() && !isForMeeting)
                 {
-                    SelfName = $"{ColorString(seer.GetRoleColor(), $"<color=#4fa1ff><u></color>{SeerRealName}</u>")}{SelfDeathReason}<color=#4fa1ff>✚</color>{SelfMark}";
+                    SelfName = $"{ColorString(selfNameColor, $"<color=#4fa1ff><u></color>{SeerRealName}</u>")}{SelfDeathReason}<color=#4fa1ff>✚</color>{SelfMark}";
                 }
 
                 bool IsDisplayInfo = false;
+                bool showIntroRoleInfo = Options.CurrentGameMode switch
+                {
+                    CustomGameMode.FFA => false,
+                    CustomGameMode.CandR => CopsAndRobbersManager.IntroRoleInfoActive,
+                    CustomGameMode.Speedrun => SpeedrunManager.IntroRoleInfoActive,
+                    _ => true
+                };
                 if (MeetingStates.FirstMeeting && Options.ChangeNameToRoleInfo.GetBool() && !isForMeeting
-                    && Options.CurrentGameMode != CustomGameMode.FFA
-                    && (Options.CurrentGameMode != CustomGameMode.CandR || CopsAndRobbersManager.IntroRoleInfoActive))
+                    && showIntroRoleInfo)
                 {
                     IsDisplayInfo = true;
                     var SeerRoleInfo = seer.GetRoleInfo();
@@ -2145,7 +2173,7 @@ public static class Utils
                         bool KnowRoleTarget = ExtendedPlayerControl.KnowRoleTarget(seer, target);
 
                         string TargetRoleText = KnowRoleTarget
-                                ? $"<size={fontSize}>{seer.GetDisplayRoleAndSubName(target, false, isForMeeting, useShortNames: true)}{GetProgressText(target)}</size>\r\n" : "";
+                                ? $"<size={fontSize}>{seer.GetDisplayRoleAndSubName(target, false, isForMeeting, useShortNames: true)}{GetProgressText(target, seer)}</size>\r\n" : "";
 
                         if (seer.IsAlive() && Overseer.IsRevealedPlayer(seer, target) && target.Is(CustomRoles.Trickster))
                         {
@@ -2382,6 +2410,7 @@ public static class Utils
             PlayerState.DeathReason.BloodLet => CustomRoles.Bloodmoon.IsEnable(),
             PlayerState.DeathReason.Starved => CustomRoles.Baker.IsEnable(),
             PlayerState.DeathReason.Sacrificed => CustomRoles.Altruist.IsEnable(),
+            PlayerState.DeathReason.OutOfTime => Options.CurrentGameMode == CustomGameMode.Speedrun && SpeedrunManager.Speedrun_EnablePersonalTimer.GetBool(),
             PlayerState.DeathReason.Kill => true,
             _ => true,
         };

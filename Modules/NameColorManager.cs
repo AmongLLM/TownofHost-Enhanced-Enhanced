@@ -13,6 +13,8 @@ public static class NameColorManager
     public static string ApplyNameColorData(this string name, PlayerControl seer, PlayerControl target, bool isMeeting)
     {
         if (!AmongUsClient.Instance.IsGameStarted) return name;
+        if (SpeedrunManager.IsTaskRaceFinisher(target.PlayerId))
+            return Utils.ColorString(UnityEngine.Color.green, name);
 
         if (!TryGetData(seer, target, out var colorCode))
         {

@@ -194,6 +194,15 @@ class SetEverythingUpPatch
             goto EndOfText;
         }
 
+        if (Options.CurrentGameMode == CustomGameMode.Speedrun && CustomWinnerHolder.WinnerIds.Count > 0)
+        {
+            __instance.BackgroundBar.material.color = SpeedrunManager.ModeColor;
+            WinnerText.text = string.Join(", ", CustomWinnerHolder.WinnerIds.OrderBy(id => id)
+                .Select(id => Main.AllPlayerNames.GetValueOrDefault(id, string.Empty).RemoveHtmlTags()));
+            WinnerText.color = SpeedrunManager.ModeColor;
+            goto EndOfText;
+        }
+
         var winnerRole = (CustomRoles)CustomWinnerHolder.WinnerTeam;
         if (winnerRole >= 0)
         {
@@ -350,7 +359,8 @@ class SetEverythingUpPatch
 
         var RoleSummaryRectTransform = RoleSummary.GetComponent<RectTransform>();
         RoleSummaryRectTransform.anchoredPosition = new Vector2(Pos.x + 3.5f, Pos.y - 0.1f);
-        RoleSummary.text = sb.ToString();
+        RoleSummary.text = Options.CurrentGameMode == CustomGameMode.Speedrun
+            ? SpeedrunManager.GetGameState(forGameEnd: true) : sb.ToString();
 
         Logger.Info($"{CustomWinnerHolder.WinnerTeam}", "Winner Team");
         Logger.Info($"{LastWinsReason}", "Wins Reason");

@@ -132,6 +132,7 @@ enum CustomRPC : uint
     SyncWorkhorseTasks,
     RequestOptionChunks,
     SyncCandRData = 202,
+    SyncSpeedrunData = 203,
 }
 public enum Sounds
 {
@@ -708,6 +709,9 @@ internal class RPCHandlerPatch
                 break;
             case CustomRPC.SyncCandRData:
                 CopsAndRobbersManager.ReceiveCandRData(reader);
+                break;
+            case CustomRPC.SyncSpeedrunData:
+                SpeedrunManager.ReceiveProgress(reader);
                 break;
             case CustomRPC.SyncAllPlayerNames:
                 Main.AllPlayerNames.Clear();

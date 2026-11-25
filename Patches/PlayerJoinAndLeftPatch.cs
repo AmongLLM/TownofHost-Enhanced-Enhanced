@@ -117,8 +117,8 @@ class OnGameJoinedPatch
                 case GameModes.HideNSeek:
                     Logger.Info(" Is Hide & Seek", "Game Mode");
 
-                    // if custom game mode is Standard/FFA in H&S game, set HideNSeekTOHE
-                    if (Options.CurrentGameMode is CustomGameMode.Standard or CustomGameMode.FFA)
+                    // Use the Hide & Seek selector when the native mode is Hide & Seek.
+                    if (Options.CurrentGameMode is CustomGameMode.Standard or CustomGameMode.FFA or CustomGameMode.Speedrun)
                     {
                         // Select HideNSeekTOHE
                         Options.GameMode.SetValue(2);
@@ -443,6 +443,8 @@ class OnPlayerLeftPatch
 
                 state.Disconnected = true;
                 state.SetDead();
+                if (AmongUsClient.Instance.AmHost && Options.CurrentGameMode == CustomGameMode.Speedrun)
+                    SpeedrunManager.OnElimination(state.PlayerId);
 
                 // if the player left while he had a Notice message, clear it
                 if (NameNotifyManager.Notifying(data.Character))

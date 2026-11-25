@@ -18,7 +18,7 @@ class EmergencyMinigamePatch
 {
     public static void Postfix(EmergencyMinigame __instance)
     {
-        if (Options.DisableMeeting.GetBool() || Options.CurrentGameMode is CustomGameMode.FFA or CustomGameMode.CandR)
+        if (Options.DisableMeeting.GetBool() || Options.CurrentGameMode is CustomGameMode.FFA or CustomGameMode.CandR or CustomGameMode.Speedrun)
             __instance.Close();
         return;
     }

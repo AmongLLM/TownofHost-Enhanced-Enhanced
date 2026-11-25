@@ -1,6 +1,7 @@
 using AmongUs.GameOptions;
 using Hazel;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
+using System;
 using TOHE.Roles.AddOns.Crewmate;
 using TOHE.Roles.AddOns.Impostor;
 using TOHE.Roles.Neutral;
@@ -110,6 +111,10 @@ class AddTasksFromListPatch
 [HarmonyPatch(typeof(NetworkedPlayerInfo), nameof(NetworkedPlayerInfo.RpcSetTasks))]
 class RpcSetTasksPatch
 {
+    private static List<byte> speedrunCommonTasks;
+
+    internal static void ResetSpeedrunCommonTasks() => speedrunCommonTasks = null;
+
     // Patch to overwrite the task just before the process of allocating the task and sending the RPC is performed
     // Does not interfere with the vanilla task allocation process itself
     public static void Prefix(NetworkedPlayerInfo __instance, [HarmonyArgument(0)] ref Il2CppStructArray<byte> taskTypeIds)
@@ -130,6 +135,12 @@ class RpcSetTasksPatch
         CustomRoles? RoleNullable = pc?.GetCustomRole();
         if (RoleNullable == null) return;
         CustomRoles role = RoleNullable.Value;
+        bool speedrunRunner = Options.CurrentGameMode == CustomGameMode.Speedrun && role == CustomRoles.Runner;
+        if (Options.CurrentGameMode == CustomGameMode.Speedrun && role == CustomRoles.GM)
+        {
+            taskTypeIds = new Il2CppStructArray<byte>(0);
+            return;
+        }
 
         // Default number of tasks
         bool hasCommonTasks = true;
@@ -156,6 +167,12 @@ class RpcSetTasksPatch
             NumShortTasks = Madmate.MadSnitchTasks.GetInt();
         }
 
+        if (speedrunRunner)
+        {
+            NumLongTasks = SpeedrunManager.Speedrun_NumLongTasks.GetInt();
+            NumShortTasks = SpeedrunManager.Speedrun_NumShortTasks.GetInt();
+        }
+
         // GM - no have tasks, Lazy Gay and Lazy have 1 task, FFA all are killers so need to assign any tasks
         if (pc.Is(CustomRoles.GM) || pc.Is(CustomRoles.LazyGuy) || pc.Is(CustomRoles.Lazy) || Options.CurrentGameMode == CustomGameMode.FFA)
         {
@@ -179,23 +196,49 @@ class RpcSetTasksPatch
             hasCommonTasks = false;
         }
 
-        if (taskTypeIds.Count == 0) hasCommonTasks = false; //Common to 0 when redistributing tasks
-        if (!hasCommonTasks && NumLongTasks == 0 && NumShortTasks == 0) NumShortTasks = 1; //Task 0 Measures
-        if (hasCommonTasks && NumLongTasks == Main.NormalOptions.NumLongTasks && NumShortTasks == Main.NormalOptions.NumShortTasks) return; //If there are no changes
+        if (!speedrunRunner)
+        {
+            if (taskTypeIds.Count == 0) hasCommonTasks = false; //Common to 0 when redistributing tasks
+            if (!hasCommonTasks && NumLongTasks == 0 && NumShortTasks == 0) NumShortTasks = 1; //Task 0 Measures
+            if (hasCommonTasks && NumLongTasks == Main.NormalOptions.NumLongTasks && NumShortTasks == Main.NormalOptions.NumShortTasks) return; //If there are no changes
+        }
 
         // A list containing the IDs of tasks that can be assigned
         // Clone of the second argument of the original RpcSetTasks
         Il2CppSystem.Collections.Generic.List<byte> TasksList = new();
-        foreach (var num in taskTypeIds)
-            TasksList.Add(num);
+        if (speedrunRunner)
+        {
+            if (speedrunCommonTasks == null)
+            {
+                Il2CppSystem.Collections.Generic.List<NormalPlayerTask> commonTasks = new();
+                foreach (var task in ShipStatus.Instance.CommonTasks)
+                    commonTasks.Add(task);
+                commonTasks = Shuffle(commonTasks);
+                // Filter before clamping: the Harmony prefix also runs in AddTasksFromList.
+                AddTasksFromListPatch.Prefix(ShipStatus.Instance, commonTasks);
+                Il2CppSystem.Collections.Generic.List<byte> selected = new();
+                Il2CppSystem.Collections.Generic.HashSet<TaskTypes> commonTypes = new();
+                int start = 0;
+                int count = Math.Min(SpeedrunManager.Speedrun_NumCommonTasks.GetInt(), CountAvailableTaskTypes(commonTasks, commonTypes));
+                ShipStatus.Instance.AddTasksFromList(ref start, count, selected, commonTypes, commonTasks);
+                speedrunCommonTasks = [];
+                foreach (var id in selected) speedrunCommonTasks.Add(id);
+            }
+
+            foreach (var id in speedrunCommonTasks) TasksList.Add(id);
+        }
+        else
+        {
+            foreach (var num in taskTypeIds) TasksList.Add(num);
+        }
 
         // Reference:ShipStatus.Begin
         // Deleting unnecessary allocated tasks
         // Deleting tasks other than common tasks if common tasks are assigned
         // Empty the list if common tasks are not allocated
-        int defaultCommonTasksNum = Main.RealOptionsData.GetInt(Int32OptionNames.NumCommonTasks);
-        if (!appendWorkhorseTasks)
+        if (!speedrunRunner && !appendWorkhorseTasks)
         {
+            int defaultCommonTasksNum = Main.RealOptionsData.GetInt(Int32OptionNames.NumCommonTasks);
             if (hasCommonTasks) TasksList.RemoveRange(defaultCommonTasksNum, TasksList.Count - defaultCommonTasksNum);
             else TasksList.Clear();
             TasksList = Shuffle(TasksList);
@@ -204,6 +247,9 @@ class RpcSetTasksPatch
         // A HashSet into which allocated tasks can be placed
         // Prevents multiple assignments of the same task
         Il2CppSystem.Collections.Generic.HashSet<TaskTypes> usedTaskTypes = new();
+        if (speedrunRunner)
+            foreach (var task in ShipStatus.Instance.CommonTasks)
+                if (TasksList.Contains((byte)task.Index)) usedTaskTypes.Add(task.TaskType);
         int start2 = 0;
         int start3 = 0;
 
@@ -219,6 +265,13 @@ class RpcSetTasksPatch
             ShortTasks.Add(task);
         ShortTasks = Shuffle(ShortTasks);
 
+        if (speedrunRunner)
+        {
+            AddTasksFromListPatch.Prefix(ShipStatus.Instance, LongTasks);
+            AddTasksFromListPatch.Prefix(ShipStatus.Instance, ShortTasks);
+            NumLongTasks = Math.Min(NumLongTasks, CountAvailableTaskTypes(LongTasks, usedTaskTypes));
+        }
+
         // Use the function to assign tasks that are actually used on the Among Us side
         ShipStatus.Instance.AddTasksFromList(
             ref start2,
@@ -227,6 +280,13 @@ class RpcSetTasksPatch
             usedTaskTypes,
             LongTasks
         );
+        if (speedrunRunner)
+        {
+            int availableShortTasks = CountAvailableTaskTypes(ShortTasks, usedTaskTypes);
+            NumShortTasks = Math.Min(NumShortTasks, availableShortTasks);
+            if (TasksList.Count == 0 && NumShortTasks == 0 && availableShortTasks > 0)
+                NumShortTasks = 1;
+        }
         ShipStatus.Instance.AddTasksFromList(
             ref start3,
             NumShortTasks,
@@ -243,6 +303,15 @@ class RpcSetTasksPatch
         }
 
     }
+    private static int CountAvailableTaskTypes(Il2CppSystem.Collections.Generic.List<NormalPlayerTask> tasks,
+        Il2CppSystem.Collections.Generic.HashSet<TaskTypes> usedTaskTypes)
+    {
+        HashSet<TaskTypes> available = [];
+        foreach (var task in tasks)
+            if (!usedTaskTypes.Contains(task.TaskType)) available.Add(task.TaskType);
+        return available.Count;
+    }
+
     public static Il2CppSystem.Collections.Generic.List<T> Shuffle<T>(Il2CppSystem.Collections.Generic.List<T> list)
     {
         int listCount = list.Count;

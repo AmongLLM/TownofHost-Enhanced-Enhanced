@@ -103,6 +103,7 @@ class CoShowIntroPatch
         }
 
         if (RoleDistribution.IsActive) RoleDistribution.InitialTaskAssignmentFinished = true;
+        if (Options.CurrentGameMode == CustomGameMode.Speedrun) SpeedrunManager.OnTasksAssigned();
 
         // Always replace the temporary zero-cooldown startup options, even if
         // task initialization failed. Cooldown repair uses these senders too.
@@ -791,6 +792,14 @@ class BeginCrewmatePatch
                 : DestroyableSingleton<HudManager>.Instance.TaskCompleteSound;
             StartFadeIntro(__instance, Color.blue, Color.red);
         }
+        else if (Options.CurrentGameMode == CustomGameMode.Speedrun)
+        {
+            __instance.TeamTitle.text = GetString("Speedrun");
+            __instance.TeamTitle.color = __instance.BackgroundBar.material.color = SpeedrunManager.ModeColor;
+            __instance.ImpostorText.gameObject.SetActive(true);
+            __instance.ImpostorText.text = SpeedrunManager.IsTaskRace
+                ? SpeedrunManager.GetTaskRaceDescription() : GetString("RunnerInfo");
+        }
 
         // I hope no one notices this in code
         if (Input.GetKey(KeyCode.RightShift))
@@ -1008,7 +1017,7 @@ class IntroCutsceneDestroyPatch
                 {
                     pc.RpcResetAbilityCooldown();
 
-                    if (Options.FixFirstKillCooldown.GetBool() && Options.CurrentGameMode is not (CustomGameMode.FFA or CustomGameMode.CandR))
+                    if (Options.FixFirstKillCooldown.GetBool() && Options.CurrentGameMode == CustomGameMode.Standard)
                     {
                         _ = new LateTask(() =>
                         {
@@ -1065,6 +1074,7 @@ class IntroCutsceneDestroyPatch
             {
                 CustomGameMode.FFA => true,
                 CustomGameMode.CandR => CopsAndRobbersManager.CandR_ShowChatInGame.GetBool(),
+                CustomGameMode.Speedrun => SpeedrunManager.Speedrun_ShowChatInGame.GetBool(),
                 _ => false
             };
             try
@@ -1077,6 +1087,7 @@ class IntroCutsceneDestroyPatch
             }
 
             Utils.CheckAndSetVentInteractions();
+            if (Options.CurrentGameMode == CustomGameMode.Speedrun) SpeedrunManager.BeginGameplayIfReady();
         }
 
         // ShowRole's iterator factory can be inlined by IL2CPP. The native intro
@@ -1086,14 +1097,18 @@ class IntroCutsceneDestroyPatch
         if (AmongUsClient.Instance.AmHost && GameStates.IsHideNSeek && PlayerIdentifiers.Shows(false, false))
             PlayerIdentifiers.RefreshLobby(hideAndSeek: true);
         Utils.DoNotifyRoles(NoCache: true);
-        if (AmongUsClient.Instance.AmHost && Options.CurrentGameMode == CustomGameMode.CandR)
+        if (AmongUsClient.Instance.AmHost && Options.CurrentGameMode is CustomGameMode.CandR or CustomGameMode.Speedrun)
         {
             // This mode has no meeting to clear the first-round role description.
+            var gameMode = Options.CurrentGameMode;
             _ = new LateTask(() =>
             {
                 if (!context.IsCurrent() || !AmongUsClient.Instance.AmHost || !GameStates.IsInGame
-                    || GameStates.IsEnded || Options.CurrentGameMode != CustomGameMode.CandR) return;
-                CopsAndRobbersManager.IntroRoleInfoActive = false;
+                    || GameStates.IsEnded || Options.CurrentGameMode != gameMode) return;
+                if (gameMode == CustomGameMode.CandR)
+                    CopsAndRobbersManager.IntroRoleInfoActive = false;
+                else
+                    SpeedrunManager.IntroRoleInfoActive = false;
                 Utils.DoNotifyRoles(ForceLoop: false);
             }, 8f, "Clear Cops and Robbers intro role info");
         }

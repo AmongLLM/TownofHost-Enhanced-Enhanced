@@ -486,6 +486,11 @@ internal class ChatCommands
                 case "/存货阵营信息":
                 case "/阵营信息":
                     if (GameStates.IsLobby || !Options.EnableKillerLeftCommand.GetBool()) break;
+                    if (Options.CurrentGameMode == CustomGameMode.Speedrun)
+                    {
+                        Utils.SendMessage(SpeedrunManager.GetRemainingPlayersText(), PlayerControl.LocalPlayer.PlayerId);
+                        break;
+                    }
 
                     var allAlivePlayers = Main.AllAlivePlayerControls;
                     int impnum = allAlivePlayers.Count(pc => pc.Is(Custom_Team.Impostor));
@@ -1653,6 +1658,12 @@ internal class ChatCommands
             Utils.SendMessage(GetString("ModeDescribe.FFA"), playerId);
             return;
         }
+        if (Options.CurrentGameMode == CustomGameMode.Speedrun)
+        {
+            Utils.SendMessage(SpeedrunManager.IsTaskRace
+                ? SpeedrunManager.GetTaskRaceDescription() : GetString("ModeDescribe.Speedrun"), playerId);
+            return;
+        }
         if (Options.CurrentGameMode == CustomGameMode.CandR)
         {
             var requestedRole = role.Trim().ToLower().TrimStart('*').Replace(" ", string.Empty);
@@ -2083,6 +2094,11 @@ internal class ChatCommands
             case "/存货阵营信息":
             case "/阵营信息":
                 if (GameStates.IsLobby || !Options.EnableKillerLeftCommand.GetBool()) break;
+                if (Options.CurrentGameMode == CustomGameMode.Speedrun)
+                {
+                    Utils.SendMessage(SpeedrunManager.GetRemainingPlayersText(), player.PlayerId);
+                    break;
+                }
 
                 var allAlivePlayers = Main.AllAlivePlayerControls;
                 int impnum = allAlivePlayers.Count(pc => pc.Is(Custom_Team.Impostor));

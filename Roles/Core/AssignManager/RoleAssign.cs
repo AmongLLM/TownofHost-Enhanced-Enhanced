@@ -16,6 +16,10 @@ public static class RoleAssign
             RoleResult = players.ToDictionary(pc => pc.PlayerId, _ => CustomRoles.Killer);
         else if (Options.CurrentGameMode == CustomGameMode.CandR)
             RoleResult = CopsAndRobbersManager.SetRoles();
+        else if (Options.CurrentGameMode == CustomGameMode.Speedrun)
+            RoleResult = players.ToDictionary(pc => pc.PlayerId,
+                pc => (pc.AmOwner && Main.EnableGM.Value) || TOHE.Modules.PlayerTagFiles.IsGameMaster(pc)
+                    ? CustomRoles.GM : CustomRoles.Runner);
         else
         {
             RoundAssignment.RoleInput = RoleAssignmentCatalog.Capture(seed, players);

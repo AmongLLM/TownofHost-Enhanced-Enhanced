@@ -215,6 +215,7 @@ internal class ChangeRoleSettings
             //FFA
             FFAManager.Init();
             CopsAndRobbersManager.Init();
+            SpeedrunManager.Init();
 
             FallFromLadder.Reset();
             CustomWinnerHolder.Reset();
@@ -496,7 +497,7 @@ internal class StartGameHostPatch
                 goto EndOfSelectRolePatch;
             }
 
-            if (Options.CurrentGameMode == CustomGameMode.CandR)
+            if (Options.CurrentGameMode is CustomGameMode.CandR or CustomGameMode.Speedrun)
             {
                 foreach (var (id, role) in RoleAssign.RoleResult)
                 {
@@ -582,6 +583,9 @@ internal class StartGameHostPatch
                     break;
                 case CustomGameMode.CandR:
                     GameEndCheckerForNormal.SetPredicateToCandR();
+                    break;
+                case CustomGameMode.Speedrun:
+                    GameEndCheckerForNormal.SetPredicateToSpeedrun();
                     break;
             }
 
