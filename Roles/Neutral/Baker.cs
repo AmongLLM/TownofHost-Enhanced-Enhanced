@@ -1,7 +1,6 @@
 ﻿using AmongUs.GameOptions;
 using Hazel;
 using InnerNet;
-using System;
 using System.Text;
 using TOHE.Roles.Core;
 using static TOHE.Options;
@@ -38,6 +37,16 @@ internal class Baker : RoleBase
     private static bool CanUseAbility;
     public static bool StarvedNonBreaded;
 
+    private enum BreadSync : byte
+    {
+        AddBread,
+        Reveal,
+        Barrier,
+        RemoveBread,
+        SelectBread,
+        ClearBarriers,
+    }
+
     public override void SetupCustomOption()
     {
         SetupSingleRoleOptions(Id, TabGroup.NeutralRoles, CustomRoles.Baker, 1, zeroOne: false);
@@ -67,14 +76,14 @@ internal class Baker : RoleBase
         BreadList[playerId] = [];
         RevealList[playerId] = [];
         BarrierList[playerId] = [];
-        Famine.FamineList[playerId] = [];
         CanUseAbility = true;
         StarvedNonBreaded = false;
         BreadID = 0;
         CustomRoleManager.CheckDeadBodyOthers.Add(OnPlayerDead);
     }
+    public override void Remove(byte playerId) => CustomRoleManager.CheckDeadBodyOthers.Remove(OnPlayerDead);
 
-    private static (int, int) BreadedPlayerCount(byte playerId)
+    private static (int Breaded, int Required) BreadedPlayerCount(byte playerId)
     {
         int breaded = 0, all = BreadNeededToTransform.GetInt();
         foreach (var pc in Main.AllAlivePlayerControls)
@@ -87,36 +96,56 @@ internal class Baker : RoleBase
         return (breaded, all);
     }
     public static byte CurrentBread() => BreadID;
-    private static void SendRPC(byte typeId, PlayerControl player, PlayerControl target)
+    private static void SendRPC(BreadSync update, PlayerControl baker, byte value)
     {
-        if (!player.IsNonHostModdedClient()) return;
-        MessageWriter writer = CustomRpcTransport.Start(CustomRPC.SyncRoleSkill, SendOption.Reliable);
-        writer.WriteNetObject(player);
-        writer.Write(typeId);
-        writer.Write(player.PlayerId);
-        writer.Write(target.PlayerId);
-        CustomRpcTransport.Finish(writer);
-    }
-    public override void ReceiveRPC(MessageReader reader, PlayerControl NaN)
-    {
-        byte typeId = reader.ReadByte();
-        byte BakerId = reader.ReadByte();
-        byte BreadHolderId = reader.ReadByte();
-
-        switch (typeId)
+        bool shareWithApocalypse = update is BreadSync.AddBread or BreadSync.RemoveBread
+            || (update == BreadSync.Reveal && ApocCanSeeReveals.GetBool());
+        foreach (var seer in Main.AllPlayerControls)
         {
-            case 0:
-                BreadList[BakerId].Add(BreadHolderId);
+            if (!seer.IsNonHostModdedClient() || (seer.PlayerId != baker.PlayerId && !(shareWithApocalypse && seer.IsNeutralApocalypse()))) continue;
+
+            CustomRpcTransport.Send(CustomRPC.SyncRoleSkill, writer =>
+            {
+                writer.WriteNetObject(baker);
+                writer.Write((byte)update);
+                writer.Write(baker.PlayerId);
+                writer.Write(value);
+            }, seer.GetClientId());
+        }
+    }
+    public override void ReceiveRPC(MessageReader reader, PlayerControl baker)
+    {
+        var update = (BreadSync)reader.ReadByte();
+        byte bakerId = reader.ReadByte();
+        byte value = reader.ReadByte();
+
+        switch (update)
+        {
+            case BreadSync.AddBread:
+                BreadList[bakerId].Add(value);
                 break;
-            case 1:
-                RevealList[BakerId].Add(BreadHolderId);
+            case BreadSync.Reveal:
+                RevealList[bakerId].Add(value);
                 break;
-            case 2:
-                BarrierList[BakerId].Add(BreadHolderId);
+            case BreadSync.Barrier:
+                BarrierList[bakerId].Add(value);
+                break;
+            case BreadSync.RemoveBread:
+                BreadList[bakerId].Remove(value);
+                break;
+            case BreadSync.SelectBread:
+                BreadID = value;
+                break;
+            case BreadSync.ClearBarriers:
+                BarrierList[bakerId].Clear();
                 break;
         }
     }
-    public override string GetProgressText(byte playerId, bool comms) => ColorString(GetRoleColor(CustomRoles.Baker).ShadeColor(0.25f), $"({BreadedPlayerCount(playerId).Item1}/{BreadedPlayerCount(playerId).Item2})");
+    public override string GetProgressText(byte playerId, bool comms)
+    {
+        var (breaded, required) = BreadedPlayerCount(playerId);
+        return ColorString(GetRoleColor(CustomRoles.Baker).ShadeColor(0.25f), $"({breaded}/{required})");
+    }
     public override bool OthersKnowTargetRoleColor(PlayerControl seer, PlayerControl target) => KnowRoleTarget(seer, target);
     public override bool KnowRoleTarget(PlayerControl seer, PlayerControl target)
     {
@@ -129,16 +158,8 @@ internal class Baker : RoleBase
         return false;
     }
     public static bool ApocKnowRoleTarget(PlayerControl apoc, PlayerControl target)
-    {
-        if (apoc == null || !apoc.IsNeutralApocalypse()) return false;
-        if (!ApocCanSeeReveals.GetBool()) return false;
-        bool result = false;
-        foreach (var baker in RevealList.Keys)
-        {
-            if (RevealList[baker].Contains(target.PlayerId)) result = true;
-        }
-        return result;
-    }
+        => apoc != null && apoc.IsNeutralApocalypse() && ApocCanSeeReveals.GetBool()
+            && RevealList.Values.Any(targets => targets.Contains(target.PlayerId));
     public override string GetMark(PlayerControl seer, PlayerControl seen = null, bool isForMeeting = false)
     {
         StringBuilder sb = new();
@@ -168,16 +189,9 @@ internal class Baker : RoleBase
     public override void SetAbilityButtonText(HudManager hud, byte playerId)
     {
         hud.KillButton.OverrideText(GetString("BakerKillButtonText"));
-        hud.AbilityButton.OverrideText(GetString("BakerUnshiftButtonText"));
+        if (BTOS2Baker.GetBool()) hud.AbilityButton.OverrideText(GetString("BakerUnshiftButtonText"));
     }
     public static bool HasBread(byte pc, byte target) => BreadList.TryGetValue(pc, out var breadList) && breadList.Contains(target);
-    private static bool AllHasBread(PlayerControl player)
-    {
-        if (!player.Is(CustomRoles.Baker)) return false;
-
-        var (countItem1, countItem2) = BreadedPlayerCount(player.PlayerId);
-        return countItem1 >= countItem2;
-    }
 
     public override void OnReportDeadBody(PlayerControl marg, NetworkedPlayerInfo iscute)
     {
@@ -185,19 +199,14 @@ internal class Baker : RoleBase
     }
     private void OnPlayerDead(PlayerControl killer, PlayerControl deadPlayer, bool inMeeting)
     {
-        foreach (var playerId in BreadList.Keys.ToList())
+        var baker = _Player;
+        if (baker == null || !baker.Is(CustomRoles.Baker) || !BreadList[baker.PlayerId].Remove(deadPlayer.PlayerId)) return;
+
+        SendRPC(BreadSync.RemoveBread, baker, deadPlayer.PlayerId);
+        if (RegenBread.GetBool() && !CanUseAbility && baker.IsAlive())
         {
-            var baker = GetPlayerById(playerId);
-            if (HasBread(playerId, deadPlayer.PlayerId))
-            {
-                BreadList[playerId].Remove(deadPlayer.PlayerId);
-                Logger.Info($"{deadPlayer.GetNameWithRole()} died, remove them from BreadList", "Baker");
-                if (RegenBread.GetBool())
-                {
-                    CanUseAbility = true;
-                    baker.Notify(string.Format(GetString("BakerBreadDied"), deadPlayer.GetRealName()));
-                }
-            }
+            CanUseAbility = true;
+            baker.Notify(string.Format(GetString("BakerBreadDied"), deadPlayer.GetRealName()));
         }
     }
     public override void UnShapeShiftButton(PlayerControl pc)
@@ -220,6 +229,7 @@ internal class Baker : RoleBase
                     sb.Append(GetString("BakerSwitchBread") + GetString("BakerRevealBread"));
                     break;
             }
+            SendRPC(BreadSync.SelectBread, pc, BreadID);
             pc.Notify(sb.ToString());
         }
     }
@@ -259,10 +269,7 @@ internal class Baker : RoleBase
         else
         {
             BreadList[killer.PlayerId].Add(target.PlayerId);
-            SendRPC(0, killer, target);
-
-            NotifyRoles(SpecifySeer: killer);
-            killer.Notify(GetString("BakerBreaded"));
+            SendRPC(BreadSync.AddBread, killer, target.PlayerId);
             CanUseAbility = false;
 
             Logger.Info($"Bread given to " + target.GetRealName(), "Baker");
@@ -273,17 +280,24 @@ internal class Baker : RoleBase
                 {
                     case 0: // Reveal
                         RevealList[killer.PlayerId].Add(target.PlayerId);
-                        SendRPC(1, killer, target);
+                        SendRPC(BreadSync.Reveal, killer, target.PlayerId);
                         break;
                     case 1: // Roleblock
                         target.SetKillCooldownV3(999f);
                         break;
                     case 2: // Barrier
                         BarrierList[killer.PlayerId].Add(target.PlayerId);
-                        SendRPC(2, killer, target);
+                        SendRPC(BreadSync.Barrier, killer, target.PlayerId);
                         break;
                 }
             }
+
+            foreach (var seer in Main.AllAlivePlayerControls)
+            {
+                if (seer.IsNeutralApocalypse() && !seer.IsModded())
+                    NotifyRoles(SpecifySeer: seer, SpecifyTarget: target);
+            }
+            killer.Notify(GetString("BakerBreaded"));
         }
         return false;
     }
@@ -302,24 +316,32 @@ internal class Baker : RoleBase
     }
     public override void AfterMeetingTasks()
     {
-        if (playerIdList.Any())
-            BarrierList[playerIdList.First()].Clear();
+        var baker = _Player;
+        if (baker == null || BarrierList[baker.PlayerId].Count == 0) return;
+
+        BarrierList[baker.PlayerId].Clear();
+        SendRPC(BreadSync.ClearBarriers, baker, 0);
     }
     public override void OnFixedUpdate(PlayerControl player, bool lowLoad, long nowTime)
     {
-        if (lowLoad || player.Is(CustomRoles.Famine)) return;
+        if (lowLoad || !player.IsAlive()) return;
 
-        if (AllHasBread(player) || (TransformNoMoreBread.GetBool() && BreadedPlayerCount(player.PlayerId).Item1 >= Main.AllAlivePlayerControls.Count(x => !x.IsNeutralApocalypse())))
-        {
-            var bread = BreadedPlayerCount(player.PlayerId);
-            Logger.Info($"{player.GetRealName()} transformed to Famine with {bread.Item1}/{bread.Item2} bread", "Baker");
-            player.RpcChangeRoleBasis(CustomRoles.Famine);
-            player.RpcSetCustomRole(CustomRoles.Famine);
-            player.GetRoleClass()?.OnAdd(_Player.PlayerId);
+        var (breaded, required) = BreadedPlayerCount(player.PlayerId);
+        if (breaded < required && (!TransformNoMoreBread.GetBool() || Main.AllAlivePlayerControls.Any(
+            pc => !pc.IsNeutralApocalypse() && !HasBread(player.PlayerId, pc.PlayerId)))) return;
 
-            player.Notify(GetString("BakerToFamine"));
-            player.RpcGuardAndKill(player);
-        }
+        Logger.Info($"{player.GetRealName()} transformed to Famine with {breaded}/{required} bread", "Baker");
+        OnRemove(player.PlayerId);
+        if (Main.UnShapeShifter.Remove(player.PlayerId) && player.CurrentOutfitType == PlayerOutfitType.Shapeshifted)
+            player.RpcShapeshift(player, false);
+
+        player.RpcChangeRoleBasis(CustomRoles.Famine);
+        player.RpcSetCustomRole(CustomRoles.Famine);
+        player.GetRoleClass()?.OnAdd(player.PlayerId);
+        player.ResetKillCooldown();
+        player.SyncSettings();
+        player.Notify(GetString("BakerToFamine"));
+        player.RpcGuardAndKill(player);
     }
 }
 internal class Famine : RoleBase
@@ -333,10 +355,7 @@ internal class Famine : RoleBase
 
     public static readonly Dictionary<byte, HashSet<byte>> FamineList = [];
 
-    public override void Add(byte playerId)
-    {
-        CustomRoleManager.CheckDeadBodyOthers.Add(OnPlayerDead);
-    }
+    public override void Add(byte playerId) => FamineList[playerId] = [];
     public override bool OthersKnowTargetRoleColor(PlayerControl seer, PlayerControl target) => KnowRoleTarget(seer, target);
     public override bool KnowRoleTarget(PlayerControl seer, PlayerControl target) => CustomRoles.Baker.GetStaticRoleClass().KnowRoleTarget(seer, target);
     public override void SetKillCooldown(byte id) => Main.AllPlayerKillCooldown[id] = Baker.FamineStarveCooldown.GetFloat();
@@ -349,20 +368,23 @@ internal class Famine : RoleBase
     public override string GetMark(PlayerControl seer, PlayerControl seen = null, bool isForMeeting = false)
         => FamineList[seer.PlayerId].Contains(seen.PlayerId) ? $"<color={GetRoleColorCode(seer.GetCustomRole())}>⁂</color>" : string.Empty;
 
-    private static void SendRPC(PlayerControl player, PlayerControl target)
+    private static void SendRPC(PlayerControl player, byte targetId)
     {
-        MessageWriter writer = CustomRpcTransport.Start(CustomRPC.SyncRoleSkill, SendOption.Reliable);
-        writer.WriteNetObject(player);
-        writer.Write(player.PlayerId);
-        writer.Write(target.PlayerId);
-        CustomRpcTransport.Finish(writer);
+        if (!player.IsNonHostModdedClient()) return;
+        CustomRpcTransport.Send(CustomRPC.SyncRoleSkill, writer =>
+        {
+            writer.WriteNetObject(player);
+            writer.Write(player.PlayerId);
+            writer.Write(targetId);
+        }, player.GetClientId());
     }
-    public override void ReceiveRPC(MessageReader reader, PlayerControl NaN)
+    public override void ReceiveRPC(MessageReader reader, PlayerControl famine)
     {
-        byte FamineId = reader.ReadByte();
+        byte famineId = reader.ReadByte();
         byte targetId = reader.ReadByte();
 
-        FamineList[FamineId].Add(targetId);
+        if (targetId == byte.MaxValue) FamineList[famineId].Clear();
+        else FamineList[famineId].Add(targetId);
     }
 
     public override bool ForcedCheckMurderAsKiller(PlayerControl killer, PlayerControl target)
@@ -376,73 +398,52 @@ internal class Famine : RoleBase
         else if (Baker.StarvedNonBreaded)
         {
             FamineList[killer.PlayerId].Add(target.PlayerId);
-            SendRPC(killer, target);
+            SendRPC(killer, target.PlayerId);
             NotifyRoles(SpecifySeer: killer);
             killer.Notify(GetString("FamineStarved"));
             Logger.Info(target.GetRealName() + $" has been starved", "Famine");
         }
         return false;
     }
-    private void OnPlayerDead(PlayerControl killer, PlayerControl deadPlayer, bool inMeeting)
-    {
-        foreach (var playerId in FamineList.Keys.ToArray())
-        {
-            if (deadPlayer.PlayerId == playerId)
-            {
-                FamineList[playerId].Remove(playerId);
-            }
-        }
-    }
     public override void OnReportDeadBody(PlayerControl sylveon, NetworkedPlayerInfo iscute)
     {
-        foreach (var pc in FamineList)
+        var famine = _Player;
+        if (famine == null) return;
+        var starved = FamineList[famine.PlayerId];
+        if (starved.Count == 0) return;
+
+        foreach (var targetId in starved)
         {
-            foreach (var tar in pc.Value)
-            {
-                var target = tar.GetPlayer();
-                var killer = pc.Key.GetPlayer();
-                if (killer == null || target == null) continue;
-                target.RpcExileV2();
-                target.SetRealKiller(killer);
-                tar.SetDeathReason(PlayerState.DeathReason.Starved);
-                Main.PlayerStates[tar].SetDead();
-                MurderPlayerPatch.AfterPlayerDeathTasks(killer, target, true);
-                Logger.Info($"{killer.GetRealName()} has starved {target.GetRealName()}", "Famine");
-            }
+            var target = targetId.GetPlayer();
+            if (target == null || !target.IsAlive()) continue;
+            target.RpcExileV2();
+            target.SetRealKiller(famine);
+            targetId.SetDeathReason(PlayerState.DeathReason.Starved);
+            Main.PlayerStates[targetId].SetDead();
+            MurderPlayerPatch.AfterPlayerDeathTasks(famine, target, true);
+            Logger.Info($"{famine.GetRealName()} has starved {target.GetRealName()}", "Famine");
         }
 
+        starved.Clear();
+        SendRPC(famine, byte.MaxValue);
     }
     public override void OnCheckForEndVoting(PlayerState.DeathReason deathReason, params byte[] exileIds)
     {
-        Logger.Info($"Starting OnCheckForEndVoting", "Famine");
-        if (_Player == null || exileIds == null || exileIds.Contains(_Player.PlayerId) || Baker.StarvedNonBreaded) return;
+        var famine = _Player;
+        if (Baker.StarvedNonBreaded || famine == null || !famine.IsAlive() || exileIds.Contains(famine.PlayerId)
+            || Main.AfterMeetingDeathPlayers.ContainsKey(famine.PlayerId)) return;
 
-        var deathList = new HashSet<byte>();
-        var baker = _Player;
+        var deathList = new List<byte>();
         foreach (var pc in Main.AllAlivePlayerControls)
         {
-            if (pc.IsNeutralApocalypse() || Baker.HasBread(baker.PlayerId, pc.PlayerId)) continue;
-            Logger.Info($"Checking if Baker alive", "Famine");
-            if (baker.IsAlive())
-            {
-                Logger.Info($"Baker Alive", "Famine");
-                if (!Main.AfterMeetingDeathPlayers.ContainsKey(pc.PlayerId))
-                {
-                    Logger.Info($"{baker.GetRealName()} starving {pc.GetRealName()} because they had no bread", "Famine");
-                    pc.SetRealKiller(baker);
-                    deathList.Add(pc.PlayerId);
-                }
-            }
-            else
-            {
-                Logger.Info($"Baker dead", "Famine");
-                if (Main.PlayerStates[pc.PlayerId].deathReason != PlayerState.DeathReason.Suicide)
-                    Main.AfterMeetingDeathPlayers.Remove(pc.PlayerId);
-            }
+            if (pc.IsNeutralApocalypse() || Baker.HasBread(famine.PlayerId, pc.PlayerId)
+                || Main.AfterMeetingDeathPlayers.ContainsKey(pc.PlayerId)) continue;
+
+            pc.SetRealKiller(famine);
+            deathList.Add(pc.PlayerId);
         }
         CheckForEndVotingPatch.TryAddAfterMeetingDeathPlayers(PlayerState.DeathReason.Starved, [.. deathList]);
-        Baker.BreadList[baker.PlayerId].Clear();
+        if (Baker.BreadList.TryGetValue(famine.PlayerId, out var bread)) bread.Clear();
         Baker.StarvedNonBreaded = true;
-        Logger.Info($"Ended OnCheckForEndVoting", "Famine");
     }
 }

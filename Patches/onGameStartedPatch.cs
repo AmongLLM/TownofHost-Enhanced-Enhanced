@@ -534,18 +534,17 @@ internal class StartGameHostPatch
 
             foreach (var pc in PlayerControl.AllPlayerControls.GetFastEnumerator())
             {
-                if (Utils.IsMethodOverridden(pc.GetRoleClass(), "UnShapeShiftButton"))
+                var roleClass = pc.GetRoleClass();
+                bool usesShapeshifter = roleClass?.ThisRoleBase.GetRoleTypes() == RoleTypes.Shapeshifter;
+                if (usesShapeshifter && Utils.IsMethodOverridden(roleClass, "UnShapeShiftButton"))
                 {
                     Main.UnShapeShifter.Add(pc.PlayerId);
                     Logger.Info($"Added {pc.GetRealName()} because of {pc.GetCustomRole()}", "UnShapeShift.OnGameStartedPatch");
                 }
 
-                var roleClass = pc.GetRoleClass();
-
                 roleClass?.OnAdd(pc.PlayerId);
 
-                // if based role is Shapeshifter
-                if (roleClass?.ThisRoleBase.GetRoleTypes() == RoleTypes.Shapeshifter) Main.CheckShapeshift.Add(pc.PlayerId, false);
+                if (usesShapeshifter) Main.CheckShapeshift.Add(pc.PlayerId, false);
             }
 
         EndOfSelectRolePatch:

@@ -398,7 +398,6 @@ public static class Options
     public static OptionItem KillFlashDuration;
     public static OptionItem UniqueNeutralRevealScreen;
 
-
     // Ghost
     public static OptionItem GhostIgnoreTasks;
     public static OptionItem GhostCanSeeOtherRoles;
