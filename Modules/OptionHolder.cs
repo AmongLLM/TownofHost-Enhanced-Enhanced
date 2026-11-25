@@ -540,6 +540,8 @@ public static class Options
     public static OptionItem AddBracketsToAddons;
     public static OptionItem ShowShortNamesForAddOns;
     public static OptionItem NoLimitAddonsNumMax;
+    public static OptionItem RemoveIncompatibleAddOnsMidGame;
+
 
     // Add-Ons settings 
     public static OptionItem LoverSpawnChances;
@@ -747,6 +749,8 @@ public static class Options
         ShowShortNamesForAddOns = StringOptionItem.Create(60035, "ShowShortNamesForAddOns", EnumHelper.GetAllNames<ShortAddOnNamesMode>(), 0, TabGroup.Addons, false)
             .SetParent(NameDisplayAddons);
         NoLimitAddonsNumMax = IntegerOptionItem.Create(60020, "NoLimitAddonsNumMax", new(1, 15, 1), 1, TabGroup.Addons, false)
+            .SetGameMode(CustomGameMode.Standard);
+        RemoveIncompatibleAddOnsMidGame = BooleanOptionItem.Create(60034, "RemoveIncompatibleAddOnsMidGame", true, TabGroup.Addons, false)
             .SetGameMode(CustomGameMode.Standard);
         #endregion
 
