@@ -3882,6 +3882,7 @@
   "RoleType.NeutralChaos": "<color=#D4AF37>★</color> Neutral <color=#D4AF37>Chaos</color> Roles",
   "RoleType.NeutralKilling": "<color=#ff1919>★</color> Neutral <color=#ff1919>Killing</color> Roles",
   "RoleType.NeutralApocalypse": "<color=#ff174f>★</color> Neutral <color=#ff174f>Apocalypse</color> Roles /apocalypseinfo",
+  "RoleType.OtherRoles": "Other Roles",
   "RoleType.Harmful": "<color=#ff1919>★ Harmful</color> Add-ons",
   "RoleType.Support": "★ Supportive Add-ons",
   "RoleType.Helpful": "<color=#00FF00>★ Helpful</color> Add-ons",

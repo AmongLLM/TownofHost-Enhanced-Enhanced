@@ -11,14 +11,17 @@ namespace TOHE;
 [HarmonyPatch(typeof(TaskAdderGame), nameof(TaskAdderGame.ShowFolder))]
 public static class ShowFolderPatch
 {
-    public const int MaxPageItems = 6;
     private const string ModeFolderName = "TOHEEFreeplayModes";
+    private const string RoleRootName = "TOHEEFreeplayRoles";
     private static TaskFolder CustomRolesFolder;
     private static TaskFolder modesFolder;
     private static TaskFolder injectedRoot;
+    private static CustomGameMode roleFolderMode;
     private static TaskAdderGame owner;
+    private static Transform scaledTaskParent;
+    private static Vector3 originalTaskScale;
     private static readonly List<TaskFolder> injectedFolders = [];
-    private static readonly Dictionary<string, CustomRoles[]> Pages = [];
+    private static readonly Dictionary<string, CustomRoles[]> RoleFolders = [];
     internal static readonly Dictionary<TaskAddButton, CustomRoles> CustomButtons = [];
     internal static readonly Dictionary<TaskAddButton, CustomGameMode> ModeButtons = [];
     private static readonly (CustomGameMode Mode, string Name)[] FreeplayModes =
@@ -34,6 +37,7 @@ public static class ShowFolderPatch
     internal static void Release(TaskAdderGame instance)
     {
         if (owner != instance) return;
+        RestoreTaskScale();
         // Destroy is deferred. Prevent late Start/Update callbacks from treating
         // these custom buttons as native task buttons after their mapping is gone.
         foreach (var button in CustomButtons.Keys.Concat(ModeButtons.Keys))
@@ -57,7 +61,7 @@ public static class ShowFolderPatch
         modesFolder = null;
         CustomButtons.Clear();
         ModeButtons.Clear();
-        Pages.Clear();
+        RoleFolders.Clear();
     }
 
     internal static void Prefix(TaskAdderGame __instance, [HarmonyArgument(0)] TaskFolder taskFolder)
@@ -78,54 +82,115 @@ public static class ShowFolderPatch
         }
         foreach (var button in CustomButtons.Keys.Concat(ModeButtons.Keys))
             if (button != null) button.gameObject.SetActive(false);
+        RestoreTaskScale();
         CustomButtons.Clear();
         ModeButtons.Clear();
-        if (owner != __instance || injectedRoot && injectedRoot != __instance.Root)
+        bool showingRoot = __instance.Root == taskFolder;
+        if (owner != __instance || injectedRoot &&
+            (injectedRoot != __instance.Root || showingRoot && roleFolderMode != FreeplayInitialization.Mode))
         {
             Release(owner);
             owner = __instance;
         }
 
-        if (__instance.Root == taskFolder && CustomRolesFolder == null)
+        if (showingRoot && CustomRolesFolder == null)
         {
             injectedRoot = taskFolder;
+            roleFolderMode = FreeplayInitialization.Mode;
             CustomRolesFolder = CreateFolder(__instance, Main.ModName);
+            CustomRolesFolder.name = RoleRootName;
             // Keep the mod entry on the first native row even when the ship exposes many task folders.
             taskFolder.SubFolders.Insert(0, CustomRolesFolder);
             modesFolder = CreateFolder(__instance, GetString("GameMode"));
             modesFolder.name = ModeFolderName;
             taskFolder.SubFolders.Insert(1, modesFolder);
 
+            if (roleFolderMode != CustomGameMode.Standard) return;
+
             var roles = CreateFolder(__instance, GetString("Roles"));
             var addons = CreateFolder(__instance, GetString("Addons"));
             CustomRolesFolder.SubFolders.Add(roles);
             CustomRolesFolder.SubFolders.Add(addons);
 
-            var available = CustomRolesHelper.AllRoles.Where(role => role != CustomRoles.NotAssigned);
+            var available = CustomRolesHelper.AllRoles.Where(role =>
+                role is not (CustomRoles.NotAssigned or CustomRoles.ShapeshifterTOHE or CustomRoles.GM) && !role.IsVanilla() && IsRoleAvailableInMode(role) &&
+                (!Options.CustomRoleSpawnChances.TryGetValue(role, out var option) || !option.IsHidden) &&
+                (role.IsAdditionRole() || role.GetStaticRoleClass() is not DefaultSetup));
             var comparer = GameOptionsMenuPatch.GetRoleNameComparer();
-            void AddGroup(TaskFolder parent, string label, IEnumerable<CustomRoles> members)
+            void AddGroup(TaskFolder parent, string key, IEnumerable<CustomRoles> members)
             {
                 var sorted = members.OrderBy(role => Options.CustomRoleSpawnChances.TryGetValue(role, out var option)
                     ? option.GetName(disableColor: true).RemoveHtmlTags()
                     : Utils.GetRoleName(role).RemoveHtmlTags(), comparer).ToArray();
-                var folder = CreateFolder(__instance, label);
+                var folder = CreateFolder(__instance, GetCategoryLabel(key));
+                folder.name = $"TOHEEFreeplayRoleFolder{RoleFolders.Count}";
+                RoleFolders[folder.name] = sorted;
                 parent.SubFolders.Add(folder);
-                AddPages(__instance, folder, sorted, 0, sorted.Length);
             }
 
-            foreach (var team in available.Where(role => !role.IsAdditionRole()).GroupBy(role => role.GetCustomRoleTeam()).OrderBy(group => group.Key))
-                AddGroup(roles, GetString($"Team{team.Key}"), team);
+            foreach (var team in available.Where(role => !role.IsAdditionRole())
+                .GroupBy(role => role.IsMadmate() ? Custom_Team.Impostor : role.GetCustomRoleTeam()).OrderBy(group => group.Key))
+            {
+                var faction = CreateFolder(__instance, GetString($"Team{team.Key}"));
+                roles.SubFolders.Add(faction);
+                foreach (var category in team.GroupBy(GetRoleCategory))
+                    AddGroup(faction, category.Key, category);
+            }
 
             foreach (var type in available.Where(role => role.IsAdditionRole())
                 .GroupBy(role => CustomRoleManager.AddonClasses.TryGetValue(role, out var addon) ? addon.Type : AddonTypes.Misc)
                 .OrderBy(group => group.Key))
-            {
-                var label = GetString($"RoleType.{type.Key}").RemoveHtmlTags();
-                var qualifier = label.IndexOf('(');
-                if (qualifier >= 0) label = label[..qualifier];
-                AddGroup(addons, label.Trim('★', ' '), type);
-            }
+                AddGroup(addons, $"RoleType.{type.Key}", type);
         }
+    }
+
+    private static string GetRoleCategory(CustomRoles role)
+    {
+        var definition = role.GetStaticRoleClass();
+        if (definition.IsExperimental) return "Experimental.Roles";
+
+        return definition.ThisRoleType switch
+        {
+            Custom_RoleType.ImpostorVanilla or Custom_RoleType.CrewmateVanilla or Custom_RoleType.CrewmateVanillaGhosts => "RoleType.VanillaRoles",
+            Custom_RoleType.ImpostorKilling => "RoleType.ImpKilling",
+            Custom_RoleType.ImpostorSupport => "RoleType.ImpSupport",
+            Custom_RoleType.ImpostorConcealing => "RoleType.ImpConcealing",
+            Custom_RoleType.ImpostorHindering => "RoleType.ImpHindering",
+            Custom_RoleType.ImpostorGhosts => "RoleType.ImpGhost",
+            Custom_RoleType.Madmate => "RoleType.Madmate",
+            Custom_RoleType.CrewmateBasic => "RoleType.CrewBasic",
+            Custom_RoleType.CrewmateSupport => "RoleType.CrewSupport",
+            Custom_RoleType.CrewmateKilling => "RoleType.CrewKilling",
+            Custom_RoleType.CrewmatePower => "RoleType.CrewPower",
+            Custom_RoleType.CrewmateGhosts => "RoleType.CrewGhost",
+            Custom_RoleType.NeutralBenign => "RoleType.NeutralBenign",
+            Custom_RoleType.NeutralEvil => "RoleType.NeutralEvil",
+            Custom_RoleType.NeutralChaos => "RoleType.NeutralChaos",
+            Custom_RoleType.NeutralKilling => "RoleType.NeutralKilling",
+            Custom_RoleType.NeutralApocalypse => "RoleType.NeutralApocalypse",
+            _ => "RoleType.OtherRoles",
+        };
+    }
+
+    internal static bool IsRoleAvailableInMode(CustomRoles role) => FreeplayInitialization.Mode switch
+    {
+        CustomGameMode.CandR => role is CustomRoles.GM or CustomRoles.Cop or CustomRoles.Robber,
+        CustomGameMode.Speedrun => role is CustomRoles.GM or CustomRoles.Runner,
+        CustomGameMode.FFA => role is CustomRoles.GM or CustomRoles.Killer,
+        _ => role is not (CustomRoles.Cop or CustomRoles.Robber or CustomRoles.Runner or CustomRoles.Killer),
+    };
+
+    private static string GetCategoryLabel(string key)
+    {
+        var label = GetString(key);
+        // Settings headings can include help commands or a caution in smaller text.
+        var note = label.IndexOf("<size=", StringComparison.Ordinal);
+        if (note >= 0) label = label[..note];
+        var command = label.IndexOf(" /", StringComparison.Ordinal);
+        if (command < 0) command = label.IndexOf("/ghostinfo", StringComparison.Ordinal);
+        if (command < 0) command = label.IndexOf("/apocalypseinfo", StringComparison.Ordinal);
+        if (command >= 0) label = label[..command];
+        return label.RemoveHtmlTags().Trim('★', ' ');
     }
 
     private static TaskFolder CreateFolder(TaskAdderGame instance, string name)
@@ -140,26 +205,33 @@ public static class ShowFolderPatch
         return folder;
     }
 
-    private static void AddPages(TaskAdderGame instance, TaskFolder folder, CustomRoles[] roles, int start, int count)
+    private static void RestoreTaskScale()
     {
-        if (count <= MaxPageItems)
-        {
-            folder.name = $"TOHEEFreeplayRolePage{Pages.Count}";
-            Pages[folder.name] = roles[start..(start + count)];
-            return;
-        }
+        if (scaledTaskParent) scaledTaskParent.localScale = originalTaskScale;
+        scaledTaskParent = null;
+    }
 
-        // A bounded native folder tree: directory pages and role pages both contain at most six items.
-        int groupSize = MaxPageItems;
-        while ((long)groupSize * MaxPageItems < count) groupSize *= MaxPageItems;
-        for (int offset = 0; offset < count; offset += groupSize)
+    private static void FitRoleFiles(TaskAdderGame instance)
+    {
+        var parent = instance.TaskParent;
+        var background = instance.transform.Find("Background");
+        var frame = background ? background.GetComponent<SpriteRenderer>() : null;
+        if (!parent || !frame) return;
+
+        float availableDepth = -parent.InverseTransformPoint(frame.bounds.min).y - 0.15f;
+        float contentDepth = 0f;
+        foreach (var button in CustomButtons.Keys)
         {
-            int childCount = Math.Min(groupSize, count - offset);
-            var firstRole = Utils.GetRoleName(roles[start + offset]).RemoveHtmlTags();
-            var child = CreateFolder(instance, $"{firstRole} …");
-            AddPages(instance, child, roles, start + offset, childCount);
-            folder.SubFolders.Add(child);
+            float iconDepth = -parent.InverseTransformPoint(button.FileImage.bounds.min).y;
+            float textDepth = -parent.InverseTransformPoint(button.Text.renderer.bounds.min).y;
+            contentDepth = Mathf.Max(contentDepth, Mathf.Max(iconDepth, textDepth));
         }
+        if (availableDepth <= 0f || contentDepth <= availableDepth) return;
+
+        scaledTaskParent = parent;
+        originalTaskScale = parent.localScale;
+        float fit = availableDepth / contentDepth;
+        parent.localScale = new Vector3(originalTaskScale.x * fit, originalTaskScale.y * fit, originalTaskScale.z);
     }
 
     internal static void Postfix(TaskAdderGame __instance, [HarmonyArgument(0)] TaskFolder taskFolder)
@@ -195,15 +267,43 @@ public static class ShowFolderPatch
         {
             foreach (var (mode, name) in FreeplayModes) ModeButtons[AddButton(GetString(name), Color.cyan)] = mode;
         }
-        else if (owner == __instance && Pages.TryGetValue(folderKey, out var roles))
+        else if (owner == __instance && folderKey == RoleRootName)
         {
-            foreach (var role in roles) CustomButtons[AddButton(Utils.GetRoleName(role), Utils.GetRoleColor(role))] = role;
+            // Standard displays the two category folders before the Game Master file.
+            xCursor = taskFolder.SubFolders.Count * __instance.folderWidth;
+            CustomRoles[] choices = FreeplayInitialization.Mode switch
+            {
+                CustomGameMode.CandR => [CustomRoles.Cop, CustomRoles.Robber, CustomRoles.GM],
+                CustomGameMode.Speedrun => [CustomRoles.Runner, CustomRoles.GM],
+                CustomGameMode.FFA => [CustomRoles.Killer, CustomRoles.GM],
+                _ => [CustomRoles.GM],
+            };
+            foreach (var role in choices) CustomButtons[AddButton(Utils.GetRoleName(role), Utils.GetRoleColor(role))] = role;
+        }
+        else if (owner == __instance && RoleFolders.TryGetValue(folderKey, out var roles))
+        {
+            foreach (var role in roles.Where(IsRoleAvailableInMode))
+                CustomButtons[AddButton(Utils.GetRoleName(role), Utils.GetRoleColor(role))] = role;
+            FitRoleFiles(__instance);
+        }
+
+        if (FreeplayInitialization.Mode != CustomGameMode.Standard && taskFolder == __instance.Root)
+        {
+            foreach (var item in __instance.ActiveItems)
+            {
+                if (!item) continue;
+                var folder = item.GetComponent<TaskFolder>();
+                if (!folder || folder.RoleChildren.Count == 0 || folder.TaskChildren.Count != 0 || folder.SubFolders.Count != 0) continue;
+                foreach (var element in item.GetComponentsInChildren<UiElement>(true))
+                    ControllerManager.Instance.RemoveSelectableUiElement(element);
+                item.gameObject.SetActive(false);
+            }
         }
 
         if (ControllerManager.Instance.CurrentUiState?.MenuName == __instance.name &&
             ControllerManager.Instance.CurrentUiState.CurrentSelection == null && __instance.ActiveItems.Count > 0)
         {
-            var first = __instance.ActiveItems[0].GetComponent<UiElement>();
+            var first = __instance.ActiveItems.ToArray().FirstOrDefault(item => item && item.gameObject.activeInHierarchy)?.GetComponent<UiElement>();
             if (first != null) ControllerManager.Instance.SetCurrentSelected(first);
         }
     }
@@ -283,18 +383,31 @@ class AddTaskButtonPatch
         if (ShowFolderPatch.CustomButtons.TryGetValue(__instance, out var customRole))
         {
             var player = PlayerControl.LocalPlayer;
-            if (!FreeplayInitialization.IsReady || player == null
+            if (!FreeplayInitialization.IsReady || !ShowFolderPatch.IsRoleAvailableInMode(customRole) || player == null
                 || !Main.PlayerStates.TryGetValue(player.PlayerId, out var state)) return false;
             if (customRole == CustomRoles.NotAssigned) return false;
+            if (FreeplayInitialization.Mode != CustomGameMode.Standard)
+            {
+                FreeplayInitialization.ChangeMode(FreeplayInitialization.Mode, customRole);
+                return false;
+            }
             if (customRole > CustomRoles.NotAssigned)
             {
                 if (state.SubRoles.Contains(customRole)) state.RemoveSubRole(customRole);
-                else state.SetSubRole(customRole, player);
+                else
+                {
+                    state.SetSubRole(customRole, player);
+                    if (customRole.IsGhostRole())
+                    {
+                        FreeplayInitialization.ExileForRole(player, state);
+                        player.RpcSetRole(RoleTypes.GuardianAngel, true);
+                    }
+                }
                 FreeplayInitialization.SyncTasks(player);
                 return false;
             }
             // Keep the native role button's task recovery and safe position behavior.
-            if (PlayerTask.DestroyTasksOfType<ImportantTextTask>(player)
+            if (!FreeplayInitialization.UsesGhostState(customRole) && PlayerTask.DestroyTasksOfType<ImportantTextTask>(player)
                 && !PlayerTask.PlayerHasTaskOfType<NormalPlayerTask>(player)) ShipStatus.Instance.Begin();
             FreeplayInitialization.ChangeRole(player, customRole, setNativeRole: true);
             player.transform.position = __instance.SafePositionWorld;
@@ -302,7 +415,13 @@ class AddTaskButtonPatch
         }
         if (__instance.Role != null)
         {
-            if (!FreeplayInitialization.IsReady || !TryMapNativeRole(__instance.Role.Role, out var mappedRole)) return false;
+            if (!FreeplayInitialization.IsReady || FreeplayInitialization.Mode != CustomGameMode.Standard
+                || !TryMapNativeRole(__instance.Role.Role, out var mappedRole)) return false;
+            if (FreeplayInitialization.UsesGhostState(mappedRole))
+            {
+                FreeplayInitialization.ChangeRole(PlayerControl.LocalPlayer, mappedRole, setNativeRole: true);
+                return false;
+            }
             if (mappedRole == CustomRoles.JudgeTOHE) FreeplayInitialization.PrepareJudgeOptions();
             __state = true;
         }

@@ -3744,6 +3744,7 @@
   "RoleType.NeutralChaos": "<color=#D4AF37>★</color> 中立<color=#ff1919>混乱类</color>身份",
   "RoleType.NeutralKilling": "<color=#ff1919>★</color> 中立<color=#ff1919>击杀类</color>身份",
   "RoleType.NeutralApocalypse": "<color=#ff174f>★</color> <color=#ff174f>灾厄</color>类中立阵营/apocalypseinfo",
+  "RoleType.OtherRoles": "其他职业",
   "RoleType.Harmful": "<color=#ff1919>★ 有害类</color>附加职业",
   "RoleType.Support": "★ 支持类附加职业",
   "RoleType.Helpful": "<color=#00FF00>★ 帮助类</color>附加职业",

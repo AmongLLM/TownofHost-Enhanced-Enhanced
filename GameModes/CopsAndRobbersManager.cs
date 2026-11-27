@@ -397,20 +397,33 @@ internal static class CopsAndRobbersManager
         RoundTime = CandR_GameTime.GetInt();
         FixedUpdateInGameModeCandRPatch.Reset();
     }
-    public static Dictionary<byte, CustomRoles> SetRoles()
+    public static Dictionary<byte, CustomRoles> SetRoles(CustomRoles? practiceRole = null)
     {
         Dictionary<byte, CustomRoles> finalRoles = [];
         var random = IRandom.Instance;
         List<PlayerControl> AllPlayers = Main.AllPlayerControls.Where(pc => pc != null && !pc.Data.Disconnected
-            && (!GameStates.IsFreePlay || pc.IsAlive() && Main.PlayerStates.ContainsKey(pc.PlayerId))).Shuffle(random).ToList();
+            && (!GameStates.IsFreePlay || Main.PlayerStates.ContainsKey(pc.PlayerId))).Shuffle(random).ToList();
 
-        if (!GameStates.IsFreePlay && Main.EnableGM.Value)
+        if (practiceRole is CustomRoles selected)
+        {
+            var player = PlayerControl.LocalPlayer;
+            finalRoles[player.PlayerId] = selected;
+            AllPlayers.Remove(player);
+            if (selected == CustomRoles.Cop) RoleType.Cop.Add(player.PlayerId);
+            else if (selected == CustomRoles.Robber) RoleType.Robber.Add(player.PlayerId);
+        }
+        else if (!GameStates.IsFreePlay && Main.EnableGM.Value)
         {
             finalRoles[PlayerControl.LocalPlayer.PlayerId] = CustomRoles.GM;
             AllPlayers.Remove(PlayerControl.LocalPlayer);
         }
 
-        int optImpNum = Math.Min(numCops, Math.Max(0, AllPlayers.Count - 1));
+        int optImpNum = practiceRole switch
+        {
+            CustomRoles.Cop => 0,
+            CustomRoles.Robber => AllPlayers.Count,
+            _ => Math.Min(numCops, Math.Max(0, AllPlayers.Count - 1)),
+        };
         foreach (PlayerControl pc in AllPlayers)
         {
             if (pc == null) continue;
@@ -430,16 +443,6 @@ internal static class CopsAndRobbersManager
         SendCandRData(5);
         SendCandRData(6);
         return finalRoles;
-    }
-
-    internal static void ChangeFreeplayRole(PlayerControl player, CustomRoles role)
-    {
-        byte id = player.PlayerId;
-        OnPlayerDisconnect(id);
-        if (role == CustomRoles.Cop) RoleType.Cop.Add(id);
-        else if (role == CustomRoles.Robber) RoleType.Robber.Add(id);
-        else if (Main.OvverideOutfit.Remove(id))
-            player.SetNewOutfit(Main.PlayerStates[id].NormalOutfit, setName: false, setNamePlate: false);
     }
 
     private static void Add(this RoleType role, byte playerId)

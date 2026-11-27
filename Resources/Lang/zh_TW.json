@@ -3421,6 +3421,7 @@
   "RoleType.NeutralChaos": "<color=#D4AF37>★</color> 中立<color=#D4AF37>混亂類</color>職業",
   "RoleType.NeutralKilling": "<color=#ff1919>★</color> 中立<color=#ff1919>帶刀類</color>職業",
   "RoleType.NeutralApocalypse": "<color=#ff174f>★</color> 中立 <color=#ff174f>災厄</color> 職業 /apocalypseinfo",
+  "RoleType.OtherRoles": "其他職業",
   "RoleType.Harmful": "<color=#ff1919>★ 有害型</color>附加職業",
   "RoleType.Support": "★ 支援型附加職業",
   "RoleType.Helpful": "<color=#00FF00>★ 幫助型</color>附加職業",

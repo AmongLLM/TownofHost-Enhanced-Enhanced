@@ -124,9 +124,9 @@ internal static class FreeplayInitialization
         Logger.Info($"Initialized offline FreePlay state for {Main.PlayerStates.Count} players", "FreePlay");
     }
 
-    internal static void ChangeMode(CustomGameMode mode)
+    internal static void ChangeMode(CustomGameMode mode, CustomRoles? selectedRole = null)
     {
-        if (!IsReady || Mode == mode) return;
+        if (!IsReady || Mode == mode && selectedRole == null) return;
 
         if (Mode == CustomGameMode.CandR)
         {
@@ -137,25 +137,30 @@ internal static class FreeplayInitialization
             }
         }
 
+        bool changingMode = Mode != mode;
         Mode = mode;
         TargetArrow.Init();
         LocateArrow.Init();
         var players = Main.AllPlayerControls.Where(player => player && player.Data != null && !player.Data.Disconnected
             && Main.PlayerStates.ContainsKey(player.PlayerId)).ToArray();
         float speed = Main.RealOptionsData.GetFloat(FloatOptionNames.PlayerSpeedMod);
-        foreach (var player in players) Main.AllPlayerSpeed[player.PlayerId] = speed;
+        foreach (var player in players)
+        {
+            Main.AllPlayerSpeed[player.PlayerId] = speed;
+            if (changingMode && mode != CustomGameMode.Standard)
+            {
+                var state = Main.PlayerStates[player.PlayerId];
+                foreach (var addon in state.SubRoles.ToArray()) state.RemoveSubRole(addon);
+            }
+        }
 
         Dictionary<byte, CustomRoles> teamRoles = null;
         switch (mode)
         {
-            case CustomGameMode.FFA:
-                FFAManager.Init();
-                FFAManager.SetData();
-                break;
             case CustomGameMode.CandR:
                 CopsAndRobbersManager.Init();
                 CopsAndRobbersManager.IntroRoleInfoActive = false;
-                teamRoles = CopsAndRobbersManager.SetRoles();
+                teamRoles = CopsAndRobbersManager.SetRoles(selectedRole);
                 break;
             case CustomGameMode.Speedrun:
                 SpeedrunManager.Init();
@@ -165,24 +170,30 @@ internal static class FreeplayInitialization
 
         foreach (var player in players)
         {
-            var role = mode switch
+            var role = player.AmOwner && selectedRole.HasValue ? selectedRole.Value : mode switch
             {
-                CustomGameMode.FFA when player.IsAlive() => CustomRoles.Killer,
+                CustomGameMode.FFA => CustomRoles.Killer,
                 CustomGameMode.CandR => teamRoles.GetValueOrDefault(player.PlayerId, CustomRoles.Crewmate),
-                CustomGameMode.Speedrun when player.IsAlive() => CustomRoles.Runner,
+                CustomGameMode.Speedrun => CustomRoles.Runner,
                 _ => CustomRoles.Crewmate
             };
-            ChangeRole(player, role, setNativeRole: !player.Data.IsDead, refresh: true);
+            ChangeRole(player, role, setNativeRole: true, refresh: true);
             if (role == CustomRoles.Cop) Main.UnShapeShifter.Add(player.PlayerId);
             player.ResetKillCooldown();
         }
-        if (mode == CustomGameMode.Speedrun) SpeedrunManager.OnTasksAssigned();
+        if (mode == CustomGameMode.FFA)
+        {
+            FFAManager.Init();
+            FFAManager.SetData();
+        }
+        else if (mode == CustomGameMode.Speedrun) SpeedrunManager.OnTasksAssigned();
     }
 
     public static void ChangeRole(PlayerControl player, CustomRoles role, bool setNativeRole, bool refresh = false)
     {
         if (!IsReady || player == null || !Main.PlayerStates.TryGetValue(player.PlayerId, out var state)) return;
-        if (!refresh && state.MainRole == role) return;
+        if (!refresh && state.MainRole == role && state.IsDead == player.Data.IsDead &&
+            (!setNativeRole || player.Data.IsDead == UsesGhostState(role))) return;
         var previousRole = state.MainRole;
         state.RoleClass.OnRemove(player.PlayerId);
         Main.DesyncPlayerList.Remove(player.PlayerId);
@@ -199,16 +210,42 @@ internal static class FreeplayInitialization
         if (setNativeRole)
         {
             if (role == CustomRoles.JudgeTOHE) PrepareJudgeOptions();
-            player.RpcSetRole(role == CustomRoles.Killer ? role.GetDYRole() : role.GetRoleTypes(), true);
+            bool isGhost = UsesGhostState(role);
+            if (isGhost)
+            {
+                ExileForRole(player, state);
+            }
+            else if (player.Data.IsDead)
+            {
+                foreach (var addon in state.SubRoles.Where(addon => addon.IsGhostRole()).ToArray()) state.RemoveSubRole(addon);
+                player.Revive();
+            }
+            state.deathReason = PlayerState.DeathReason.etc;
+            var nativeRole = role switch
+            {
+                CustomRoles.GM => RoleTypes.CrewmateGhost,
+                CustomRoles.Killer => role.GetDYRole(),
+                _ => role.GetRoleTypes(),
+            };
+            player.RpcSetRole(nativeRole, true);
         }
+        state.IsDead = player.Data.IsDead;
         state.RoleClass.OnAdd(player.PlayerId);
-        if (!refresh && Mode == CustomGameMode.CandR) CopsAndRobbersManager.ChangeFreeplayRole(player, role);
         SyncTasks(player);
         CustomRoleManager.Add();
         // The native HUD rebuilds task text on its next dirty tick. A role switch
         // must also invalidate that text even when the native tasks stay the same.
         if (player.AmOwner && HudManager.Instance != null)
             HudManager.Instance.taskDirtyTimer = 0.25f;
+    }
+
+    internal static bool UsesGhostState(CustomRoles role) => role is CustomRoles.GM or CustomRoles.GuardianAngel || role.IsGhostRole();
+
+    internal static void ExileForRole(PlayerControl player, PlayerState state)
+    {
+        if (!player.Data.IsDead) GhostRoleView.ExileLocally(player);
+        state.IsDead = player.Data.IsDead;
+        state.deathReason = PlayerState.DeathReason.etc;
     }
 
     internal static void SyncTasks(PlayerControl player)
