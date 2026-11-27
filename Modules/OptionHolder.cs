@@ -1479,8 +1479,8 @@ public static class Options
             .SetGameMode(CustomGameMode.Standard)
             .SetColor(new Color32(255, 153, 153, byte.MaxValue));
         DisableVenting1v1 = BooleanOptionItem.Create(60567, "DisableVenting1v1", false, TabGroup.ModSettings, false)
-           .SetGameMode(CustomGameMode.Standard)
-           .SetColor(new Color32(255, 153, 153, byte.MaxValue));
+            .SetGameMode(CustomGameMode.Standard)
+            .SetColor(new Color32(255, 153, 153, byte.MaxValue));
         // Disable Devices
         DisableDevices = BooleanOptionItem.Create(60570, "DisableDevices", false, TabGroup.ModSettings, false)
             .SetColor(new Color32(255, 153, 153, byte.MaxValue))

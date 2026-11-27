@@ -1,4 +1,5 @@
 using AmongUs.GameOptions;
+using TOHE.Patches;
 using UnityEngine;
 
 namespace TOHE;
@@ -34,6 +35,13 @@ class CanUseVentPatch
         if (GameStates.IsHideNSeek) return true;
 
         PlayerControl playerControl = pc.Object;
+
+        if (!playerControl.inVent && GameStates.IsModHost && VentSystemDeterioratePatch.VentingDisabledIn1v1)
+        {
+            canUse = couldUse = false;
+            __result = float.MaxValue;
+            return false;
+        }
 
         // First half, Mod-specific processing
 

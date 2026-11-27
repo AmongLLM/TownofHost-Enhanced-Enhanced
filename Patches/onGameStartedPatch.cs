@@ -55,6 +55,7 @@ internal class ChangeRoleSettings
 
             Main.LastEnteredVent.Clear();
             Main.LastEnteredVentLocation.Clear();
+            CoEnterVentPatch.RejectedVentEntries.Clear();
 
             Main.MurderedThisRound.Clear();
             CheckMurderPatch.LastKillAttemptTime.Clear();

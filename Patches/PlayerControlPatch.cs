@@ -1516,6 +1516,8 @@ class PlayerStartPatch
 [HarmonyPatch(typeof(PlayerPhysics), nameof(PlayerPhysics.CoEnterVent))]
 class CoEnterVentPatch
 {
+    internal static readonly HashSet<byte> RejectedVentEntries = [];
+
     public static bool Prefix(PlayerPhysics __instance, [HarmonyArgument(0)] int id, out bool __state)
     {
         __state = false;
@@ -1524,9 +1526,16 @@ class CoEnterVentPatch
         if (__instance.myPlayer.IsAlive() && GameStates.IsInTask && ShipStatus.Instance
             && ShipStatus.Instance.AllVents.Any(vent => vent.Id == id)) AfkMonitor.RecordActivity(__instance.myPlayer);
 
+        var playerId = __instance.myPlayer.PlayerId;
+        if (__instance.myPlayer.IsAlive() && VentSystemDeterioratePatch.VentingDisabledIn1v1)
+        {
+            RejectedVentEntries.Add(playerId);
+            return true;
+        }
+        RejectedVentEntries.Remove(playerId);
+
         if (Options.CurrentGameMode == CustomGameMode.CandR)
         {
-            var playerId = __instance.myPlayer.PlayerId;
             CoExitVentPatch.ExitingPlayers.Remove(playerId);
             if (CopsAndRobbersManager.captured.ContainsKey(playerId))
             {
@@ -1563,17 +1572,6 @@ class CoEnterVentPatch
         }
 
         playerRoleClass?.OnCoEnterVent(__instance, id);
-
-        if (Options.DisableVenting1v1.GetBool() && Main.AllAlivePlayerControls.Length <= 2)
-        {
-            var pc = __instance?.myPlayer;
-            _ = new LateTask(() =>
-            {
-                pc?.Notify(GetString("FFA-NoVentingBecauseTwoPlayers"), 7f);
-                pc?.MyPhysics?.RpcBootFromVent(id);
-            }, 0.5f, "Player No Venting Because Two Players");
-            return true;
-        }
         return true;
     }
     public static void Postfix(PlayerPhysics __instance, bool __state, ref Il2CppSystem.Collections.IEnumerator __result)
@@ -1601,6 +1599,9 @@ class EnterVentPatch
         Main.LastEnteredVentLocation.Add(pc.PlayerId, pc.GetCustomPosition());
 
         if (!AmongUsClient.Instance.AmHost) return;
+        if (pc.IsAlive() && VentSystemDeterioratePatch.VentingDisabledIn1v1)
+            CoEnterVentPatch.RejectedVentEntries.Add(pc.PlayerId);
+        if (CoEnterVentPatch.RejectedVentEntries.Contains(pc.PlayerId)) return;
 
         pc.GetRoleClass()?.OnEnterVent(pc, __instance);
 
@@ -1637,7 +1638,8 @@ class CoExitVentPatch
             __result = AfterExitVent(__result, player, context).WrapToIl2Cpp();
         }
 
-        player.GetRoleClass()?.OnExitVent(player, id);
+        if (!CoEnterVentPatch.RejectedVentEntries.Remove(player.PlayerId))
+            player.GetRoleClass()?.OnExitVent(player, id);
 
         _ = new LateTask(() => { player?.RpcSetVentInteraction(); }, 0.8f, $"Set vent interaction after exit vent {player?.PlayerId}", shoudLog: false);
     }
