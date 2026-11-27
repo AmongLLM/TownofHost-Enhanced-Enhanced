@@ -10,6 +10,15 @@ namespace TOHE.Roles.Core.AssignManager;
 public static class AddonEligibility
 {
     public static bool CanAssign(CustomRoles role, PlayerControl pc, bool checkLimitAddons = true, bool initialAssignment = false)
+        => IsCompatible(role, pc, checkLimitAddons, initialAssignment, existingAddon: false);
+
+    internal static bool CanKeep(CustomRoles role, PlayerControl pc)
+        => role.IsGhostRole() || (role.IsBetrayalAddon() && role != CustomRoles.Rascal)
+            || role is CustomRoles.Admired or CustomRoles.Knighted or CustomRoles.Cleansed
+                or CustomRoles.Workhorse or CustomRoles.LastImpostor or CustomRoles.Lovers
+            || IsCompatible(role, pc, checkLimitAddons: false, initialAssignment: true, existingAddon: true);
+
+    private static bool IsCompatible(CustomRoles role, PlayerControl pc, bool checkLimitAddons, bool initialAssignment, bool existingAddon)
     {
         // Only add-ons
         if (!role.IsAdditionRole() || pc == null) return false;
@@ -18,7 +27,7 @@ public static class AddonEligibility
             return false;
 
         // if player already has this addon
-        else if (pc.Is(role)) return false;
+        else if (!existingAddon && pc.Is(role)) return false;
 
         // Checking Lovers and Romantics
         else if ((pc.Is(CustomRoles.RuthlessRomantic) || pc.Is(CustomRoles.Romantic) || pc.Is(CustomRoles.VengefulRomantic)) && role is CustomRoles.Lovers) return false;
@@ -30,7 +39,9 @@ public static class AddonEligibility
             if (pc.GetCustomSubRoles().Count >= Options.NoLimitAddonsNumMax.GetInt()) return false;
 
 
-        if (AddonCompatibility.Conflicts(role, pc.GetCustomRole(), pc.GetCustomSubRoles())) return false;
+        var subRoles = pc.GetCustomSubRoles();
+        if (AddonCompatibility.Conflicts(role, pc.GetCustomRole(),
+            existingAddon ? subRoles.Where(existing => existing != role) : subRoles)) return false;
 
         // SetSubRole removes these identities when converting a player. Random
         // allocation must reject the combination instead of silently replacing an addon.
@@ -43,7 +54,7 @@ public static class AddonEligibility
         // Initial allocation uses role capabilities, not shield/cooldown/previous-round state.
         switch (role)
         {
-            case var Addon when (pc.IsAnySubRole(x => x.IsSpeedRole()) || pc.GetCustomRole().IsSpeedRole()) && Addon.IsSpeedRole():
+            case var Addon when (pc.IsAnySubRole(x => x != role && x.IsSpeedRole()) || pc.GetCustomRole().IsSpeedRole()) && Addon.IsSpeedRole():
                 return false;
 
             case CustomRoles.Bait:

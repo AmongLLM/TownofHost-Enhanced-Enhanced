@@ -433,7 +433,6 @@ internal class StartGameHostPatch
             // Select custom roles / add-ons
             EAC.OriginalRoles = [];
             RoleAssign.StartSelect();
-            AddonAssign.StartSelect();
 
             // Set count vanilla roles
             RoleAssign.CalculateVanillaRoleCount();
@@ -518,19 +517,7 @@ internal class StartGameHostPatch
                 AssignCustomRole(kv.Value, Utils.GetPlayerById(kv.Key));
             }
 
-            try
-            {
-                if (Options.CurrentGameMode == CustomGameMode.Standard)
-                {
-                    /*AddonAssign.StartAssigningNarc();*/
-                    AddonAssign.InitAndStartAssignLovers();
-                    AddonAssign.StartSortAndAssign();
-                }
-            }
-            catch (Exception error)
-            {
-                Logger.Warn($"Error after addons assign - error: {error}", "AddonAssign");
-            }
+            AddonAssign.Assign();
 
             // Sync for non-host modded clients by RPC
             foreach (var pair in Main.PlayerStates)

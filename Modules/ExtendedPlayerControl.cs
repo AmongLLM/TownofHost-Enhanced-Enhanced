@@ -9,6 +9,7 @@ using TOHE.Patches;
 using TOHE.Roles.AddOns.Common;
 using TOHE.Roles.AddOns.Impostor;
 using TOHE.Roles.Core;
+using TOHE.Roles.Core.AssignManager;
 using TOHE.Roles.Crewmate;
 using TOHE.Roles.Impostor;
 using TOHE.Roles.Neutral;
@@ -19,38 +20,28 @@ namespace TOHE;
 
 static class ExtendedPlayerControl
 {
-    public static void RpcSetCustomRole(this PlayerControl player, CustomRoles role, bool checkAddons = true, bool checkAAconflict = true)
+    public static void RpcSetCustomRole(this PlayerControl player, CustomRoles role, bool checkAddons = true)
     {
-        if (role < CustomRoles.NotAssigned)
-        {
-            Main.PlayerStates[player.PlayerId].SetMainRole(role);
-            // Remove incompatible Add-ons
-            if (checkAddons && Options.RemoveIncompatibleAddOnsMidGame.GetBool())
-            {
-                player.StartCoroutine(player.RemoveIncompatibleAddOnsAsync().WrapToIl2Cpp());
-            }
-        }
-        else if (role >= CustomRoles.NotAssigned)   //500:NoSubRole 501~:SubRole 
-        {
-            if (Cleanser.CantGetAddon() && player.Is(CustomRoles.Cleansed)) return;
+        var state = Main.PlayerStates[player.PlayerId];
+        bool mainRole = role < CustomRoles.NotAssigned;
+        if (!mainRole && Cleanser.CantGetAddon() && player.Is(CustomRoles.Cleansed)) return;
 
-            // Check conflict
-            if (checkAAconflict && Options.RemoveIncompatibleAddOnsMidGame.GetBool())
-            {
-                player.StartCoroutine(player.CheckAndAssignAddOnAsync(role).WrapToIl2Cpp());
-            }
-            else
-            {
-                Main.PlayerStates[player.PlayerId].SetSubRole(role, pc: player);
-            }
-        }
-        if (AmongUsClient.Instance.AmHost)
-        {
-            MessageWriter writer = CustomRpcTransport.Start(CustomRPC.SetCustomRole, SendOption.Reliable, -1);
-            writer.Write(player.PlayerId);
-            writer.WritePacked((int)role);
-            CustomRpcTransport.Finish(writer);
-        }
+        bool changed = mainRole ? state.MainRole != role : !state.SubRoles.Contains(role);
+        bool shouldCheck = changed && checkAddons && AmongUsClient.Instance.AmHost && state.SubRoles.Count > 0
+            && GameStates.IsInGame && !GameStates.IsEnded && GameStates.IsNormalGame && !role.IsGhostRole()
+            && Options.CurrentGameMode == CustomGameMode.Standard && Options.RemoveIncompatibleAddOnsMidGame.GetBool();
+        var previousAddons = shouldCheck ? state.SubRoles.ToArray() : null;
+
+        if (mainRole) state.SetMainRole(role);
+        else state.SetSubRole(role, pc: role == CustomRoles.Cleansed ? player : null);
+
+        RpcSetCustomRole(player.PlayerId, role);
+        if (previousAddons == null) return;
+
+        if (mainRole)
+            player.StartCoroutine(player.RemoveIncompatibleAddOnsAfterRoleChange(state.RoleClass, previousAddons).WrapToIl2Cpp());
+        else
+            player.RemoveIncompatibleAddOns(state, previousAddons);
     }
     public static void RpcSetCustomRole(byte PlayerId, CustomRoles role)
     {
@@ -62,56 +53,31 @@ static class ExtendedPlayerControl
             CustomRpcTransport.Finish(writer);
         }
     }
-    public static void CheckConflictedAddOnsFromList(this PlayerControl player, ref List<CustomRoles> addOnList)
+    private static System.Collections.IEnumerator RemoveIncompatibleAddOnsAfterRoleChange(this PlayerControl player, RoleBase roleClass, CustomRoles[] previousAddons)
     {
-        List<CustomRoles> conflictedAddOns = [];
-        foreach (var addon in addOnList)
-        {
-            if (!CustomRolesHelper.CheckAddonConfilct(addon, player, checkLimitAddons: false))
-            {
-                conflictedAddOns.Add(addon);
-            }
-        }
-        foreach (var removeAddOns in conflictedAddOns.ToArray())
-        {
-            Logger.Msg($"{removeAddOns} have conflict, remove from list", $"{player.GetCustomRole()}");
-            addOnList.Remove(removeAddOns);
-        }
+        // Callers initialize the new role immediately after RpcSetCustomRole returns.
+        yield return null;
+        if (player == null || !AmongUsClient.Instance.AmHost || !GameStates.IsInGame || GameStates.IsEnded || !player.IsAlive()
+            || !Main.PlayerStates.TryGetValue(player.PlayerId, out var state) || state.RoleClass != roleClass) yield break;
+
+        player.RemoveIncompatibleAddOns(state, previousAddons);
     }
-    private static System.Collections.IEnumerator RemoveIncompatibleAddOnsAsync(this PlayerControl player)
+
+    private static void RemoveIncompatibleAddOns(this PlayerControl player, PlayerState state, CustomRoles[] previousAddons)
     {
-        var currentAddOns = player.GetCustomSubRoles().Where(x => !x.IsAddonAssignedMidGame()).ToArray();
-
-        yield return new WaitForSeconds(0.1f);
-
-        foreach (var addon in currentAddOns)
+        bool removed = false;
+        foreach (var addon in previousAddons)
         {
-            if (!CustomRolesHelper.CheckAddonConfilct(addon, player, checkLimitAddons: false, checkConditions: false))
-            {
-                Main.PlayerStates[player.PlayerId].RemoveSubRole(addon);
-                Logger.Msg($"{player.GetNameWithRole()} had incompatible addon {addon}, removing addon", $"RemoveIncompatibleAddOnsAsync: {player.GetCustomRole()}");
-            }
-            yield return new WaitForSeconds(0.2f);
-        }
-    }
-    private static System.Collections.IEnumerator CheckAndAssignAddOnAsync(this PlayerControl player, CustomRoles newAddOn)
-    {
-        var currentAddOns = player.GetCustomSubRoles().Where(x => !x.IsAddonAssignedMidGame()).ToArray();
+            if (!state.SubRoles.Contains(addon) || AddonEligibility.CanKeep(addon, player)) continue;
 
-        Main.PlayerStates[player.PlayerId].SetSubRole(newAddOn, pc: player);
-
-        yield return new WaitForSeconds(0.1f);
-
-        foreach (var addOn in currentAddOns)
-        {
-            if (!CustomRolesHelper.CheckAddonConfilct(addOn, player, checkLimitAddons: false, checkConditions: false))
-            {
-                Main.PlayerStates[player.PlayerId].RemoveSubRole(addOn);
-                Logger.Msg($"{player.GetNameWithRole()} had incompatible addon {addOn}, removing addon", $"CheckAndAssignAddOnAsync: {player.GetCustomRole()}");
-            }
-            yield return new WaitForSeconds(0.2f);
+            state.RemoveSubRole(addon);
+            removed = true;
+            Logger.Msg($"{player.GetNameWithRole()} had incompatible addon {addon}, removing addon", "RemoveIncompatibleAddOns");
         }
 
+        if (!removed) return;
+        player.MarkDirtySettings();
+        Utils.NotifyRoles(SpecifyTarget: player);
     }
     public static void SetRole(this PlayerControl player, RoleTypes role, bool canOverride)
     {

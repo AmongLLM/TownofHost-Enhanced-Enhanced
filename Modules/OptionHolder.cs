@@ -542,7 +542,6 @@ public static class Options
     public static OptionItem NoLimitAddonsNumMax;
     public static OptionItem RemoveIncompatibleAddOnsMidGame;
 
-
     // Add-Ons settings 
     public static OptionItem LoverSpawnChances;
     public static OptionItem LoverKnowRoles;
