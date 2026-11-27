@@ -63,6 +63,11 @@ internal class Troller : RoleBase
 
         AllEvents = [.. EnumHelper.GetAllValues<Events>()];
 
+        if (CustomMapCompatibility.IsActive)
+        {
+            AllEvents.Remove(Events.SabotageActivated);
+            AllEvents.Remove(Events.SabotageDisabled);
+        }
         if (GetActiveMapName() is not (MapNames.Airship or MapNames.Polus or MapNames.Fungle))
         {
             AllEvents.Remove(Events.AllDoorsOpen);

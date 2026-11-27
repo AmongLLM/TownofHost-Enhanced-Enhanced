@@ -283,7 +283,13 @@ public class GameStartManagerPatch
                     Utils.SendMessage(msg);
                 }
 
-                GameStartManagerBeginGamePatch.DoTasksForBeginGame();
+                if (CustomMapCompatibility.IsLevelImposter)
+                {
+                    // LevelImposter's BeginGame prefix checks the players' map downloads.
+                    manager.BeginGame();
+                    if (manager.startState != GameStartManager.StartingStates.Countdown) return;
+                }
+                else GameStartManagerBeginGamePatch.DoTasksForBeginGame();
 
                 manager.startState = GameStartManager.StartingStates.Countdown;
                 manager.countDownTimer = (countdown == 0 ? 0.2f : countdown);
@@ -309,6 +315,7 @@ public class GameStartManagerPatch
     }
 }
 [HarmonyPatch(typeof(GameStartManager), nameof(GameStartManager.BeginGame))]
+[HarmonyAfter(CustomMapCompatibility.LevelImposterGuid)]
 public class GameStartManagerBeginGamePatch
 {
     public static bool Prefix(GameStartManager __instance)
@@ -333,7 +340,11 @@ public class GameStartManagerBeginGamePatch
         if (Options.NoGameEnd.GetBool())
             Logger.SendInGame(string.Format(GetString("Warning.NoGameEndIsEnabled"), GetString("NoGameEnd")));
 
-        if (Options.RandomMapsMode.GetBool())
+        if (CustomMapCompatibility.IsActive)
+        {
+            CreateOptionsPickerPatch.SetDleks = false;
+        }
+        else if (Options.RandomMapsMode.GetBool())
         {
             var mapId = SelectRandomMap();
 

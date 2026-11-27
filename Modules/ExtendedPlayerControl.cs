@@ -900,6 +900,7 @@ static class ExtendedPlayerControl
 
         if (AmongUsClient.Instance.AmHost)
         {
+            CustomMapCompatibility.SyncSubmergedFloor(player.PlayerId, position.y);
             // +328 because lastSequenceId has delay between the host and the vanilla client
             // And this cannot forced teleport the player
             netTransform.SnapTo(position, (ushort)(netTransform.lastSequenceId + 328));
@@ -929,6 +930,7 @@ static class ExtendedPlayerControl
     public static void RpcRandomVentTeleport(this PlayerControl player)
     {
         var vents = ShipStatus.Instance.AllVents;
+        if (vents == null || vents.Length == 0) return;
         var vent = vents.RandomElement();
 
         Logger.Info($" {vent.transform.position}", "RpcVentTeleportPosition");
@@ -1459,8 +1461,10 @@ static class ExtendedPlayerControl
 
     public static Vector2 GetCustomPosition(this PlayerControl player) => new(player.transform.position.x, player.transform.position.y);
 
-    public static Vector2 GetBlackRoomPosition()
+    public static Vector2 GetBlackRoomPosition(bool forPelican = false)
     {
+        if (CustomMapCompatibility.IsActive) return CustomMapCompatibility.GetUpperLeftPosition();
+
         return Utils.GetActiveMapId() switch
         {
             0 => new Vector2(-27f, 3.3f), // The Skeld
@@ -1468,7 +1472,7 @@ static class ExtendedPlayerControl
             2 => new Vector2(42.6f, -19.9f), // Polus
             3 => new Vector2(27f, 3.3f), // dlekS ehT
             4 => new Vector2(-16.8f, -6.2f), // Airship
-            5 => new Vector2(10.2f, 18.1f), // The Fungle
+            5 => forPelican ? new Vector2(9.6f, 23.2f) : new Vector2(10.2f, 18.1f), // The Fungle
             _ => throw new NotImplementedException(),
         };
     }

@@ -456,7 +456,7 @@ internal static class CopsAndRobbersManager
         byte robberId = robber.PlayerId;
         RoleType.Captured.SetCostume(robberId);
         bool sentTeleport = false;
-        if (CandR_TeleportCaptureToRandomLoc.GetBool())
+        if (!CustomMapCompatibility.IsActive && CandR_TeleportCaptureToRandomLoc.GetBool())
         {
             var rand = IRandom.Instance;
             if (rand.Next(100) > 50)

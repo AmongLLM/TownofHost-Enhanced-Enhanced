@@ -1,5 +1,7 @@
 ﻿using AmongUs.Data;
 using System;
+using System.Collections;
+using System.Reflection;
 using TOHE.Roles.Core;
 using TOHE.Roles.Neutral;
 
@@ -15,20 +17,57 @@ class ExileControllerWrapUpPatch
         {
             CheckAndDoRandomSpawn();
         }
-        public static void Postfix(ExileController __instance)
+        public static void Postfix(ExileController __instance) => FinishMeeting(__instance.initData.networkedPlayer, "ExileController.WrapUp");
+    }
+
+    internal static void FinishMeeting(NetworkedPlayerInfo exiled, string wrapUpMethod)
+    {
+        LogExileEnd(wrapUpMethod);
+        try
         {
-            try
-            {
-                WrapUpPostfix(__instance.initData.networkedPlayer);
-            }
-            catch (Exception error)
-            {
-                Logger.Error($"Error after exiled: {error}", "WrapUp");
-            }
-            finally
-            {
-                WrapUpFinalizer(__instance.initData.networkedPlayer);
-            }
+            WrapUpPostfix(exiled);
+        }
+        catch (Exception error)
+        {
+            Logger.Error($"Error after exiled: {error}", "WrapUp");
+        }
+        finally
+        {
+            ExileText.Reset();
+            CompleteHostMeeting();
+            RestoreLocalGameplay();
+        }
+    }
+
+    private static void LogExileEnd(string wrapUpMethod)
+        => Logger.Info($"Exile ended | map={CustomMapCompatibility.GetMapDescription()} | wrapUp={wrapUpMethod}", "Phase");
+
+    [HarmonyPatch]
+    class AirshipExileEndPatch
+    {
+        private const string WrapUpMethod = "AirshipExileController.WrapUpAndSpawn";
+
+        // Native code can inline the iterator factory. Observe the final MoveNext instead.
+        private static readonly MethodInfo MoveNextMethod = typeof(AirshipExileController)
+            .GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic)
+            .FirstOrDefault(type => type.Name.StartsWith("_WrapUpAndSpawn_d__", StringComparison.Ordinal))
+            ?.GetMethod(nameof(IEnumerator.MoveNext));
+
+        private static bool Prepare() => MoveNextMethod != null;
+        private static MethodBase TargetMethod() => MoveNextMethod;
+
+        private static void Prefix(out NetworkedPlayerInfo __state)
+        {
+            __state = CustomMapCompatibility.IsLevelImposter ? ExileController.Instance?.initData?.networkedPlayer : null;
+        }
+
+        private static void Postfix(bool __result, NetworkedPlayerInfo __state)
+        {
+            if (__result) return;
+
+            // LevelImposter can use this cutscene on a ship without AirshipStatus.PrespawnStep.
+            if (CustomMapCompatibility.IsLevelImposter) FinishMeeting(__state, WrapUpMethod);
+            else LogExileEnd(WrapUpMethod);
         }
     }
 
@@ -64,6 +103,8 @@ class ExileControllerWrapUpPatch
     }
     private static void CheckAndDoRandomSpawn()
     {
+        if (CustomMapCompatibility.IsActive) return;
+
         if (RandomSpawn.IsRandomSpawn() || Options.CurrentGameMode == CustomGameMode.FFA)
         {
             RandomSpawn.SpawnMap spawnMap = Utils.GetActiveMapName() switch
@@ -134,14 +175,6 @@ class ExileControllerWrapUpPatch
 
         Utils.CountAlivePlayers(sendLog: true, checkGameEnd: Options.CurrentGameMode is CustomGameMode.Standard);
         AntiBlackout.SkipTasks = false;
-    }
-
-    private static void WrapUpFinalizer(NetworkedPlayerInfo exiled)
-    {
-        ExileText.Reset();
-        // Even if an exception occurs in WrapUpPostfix, this is the only part that will be executed reliably.
-        CompleteHostMeeting();
-        RestoreLocalGameplay();
     }
 
     private static void CompleteHostMeeting()

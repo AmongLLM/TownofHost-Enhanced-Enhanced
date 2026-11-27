@@ -960,7 +960,7 @@ class MeetingHudStartPatch
     public static void Prefix(/*MeetingHud __instance*/)
     {
         VoteCommand.PendingClears.Clear();
-        Logger.Info("------------Opening of the session------------", "Phase");
+        Logger.Info($"Meeting started | map={CustomMapCompatibility.GetMapDescription()}", "Phase");
         ChatUpdatePatch.DoBlockChat = true;
         GameStates.AlreadyDied |= !IsAllAlive;
         Main.AllPlayerControls.Do(x => ReportDeadBodyPatch.WaitReport[x.PlayerId].Clear());
@@ -1271,7 +1271,7 @@ class MeetingHudOnDestroyPatch
     public static void Postfix()
     {
         MeetingStates.FirstMeeting = false;
-        Logger.Info("------------End Meeting------------", "Phase");
+        Logger.Info($"Meeting ended | map={CustomMapCompatibility.GetMapDescription()}", "Phase");
         if (AmongUsClient.Instance.AmHost)
         {
             AntiBlackout.SetIsDead();

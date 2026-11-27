@@ -17,6 +17,7 @@ internal class AntiAdminer : RoleBase
 
     public override CustomRoles ThisRoleBase => CustomRoles.Impostor;
     public override Custom_RoleType ThisRoleType => Custom_RoleType.ImpostorSupport;
+    public override bool IsAvailableOnMap() => !CustomMapCompatibility.IsActive;
     //==================================================================\\
 
     private static OptionItem CanCheckCamera;

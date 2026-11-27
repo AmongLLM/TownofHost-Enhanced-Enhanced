@@ -161,7 +161,10 @@ internal static class ExileTextMeetingClosePatch
 internal static class ExileTextBeginPatch
 {
     internal static void Postfix(ExileController __instance, [HarmonyArgument(0)] NetworkedPlayerInfo player, [HarmonyArgument(1)] bool tie)
-        => ExileText.Begin(__instance, player, tie);
+    {
+        Logger.Info($"Exile started | map={CustomMapCompatibility.GetMapDescription()} | controller={__instance.GetIl2CppType().Name}", "Phase");
+        ExileText.Begin(__instance, player, tie);
+    }
 }
 
 [HarmonyPatch(typeof(ExileController), nameof(ExileController.ReEnableGameplay))]

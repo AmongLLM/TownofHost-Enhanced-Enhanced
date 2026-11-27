@@ -56,8 +56,9 @@ class ShipFixedUpdatePatch
 [HarmonyPatch(typeof(ShipStatus), nameof(ShipStatus.UpdateSystem), typeof(SystemTypes), typeof(PlayerControl), typeof(MessageReader))]
 public static class MessageReaderUpdateSystemPatch
 {
-    public static bool Prefix(ShipStatus __instance, [HarmonyArgument(0)] SystemTypes systemType, [HarmonyArgument(1)] PlayerControl player, [HarmonyArgument(2)] MessageReader reader)
+    public static bool Prefix(ShipStatus __instance, [HarmonyArgument(0)] SystemTypes systemType, [HarmonyArgument(1)] PlayerControl player, [HarmonyArgument(2)] MessageReader reader, out byte? __state)
     {
+        __state = null;
         if (systemType is
             SystemTypes.Ventilation
             or SystemTypes.Security
@@ -68,30 +69,28 @@ public static class MessageReaderUpdateSystemPatch
 
         if (GameStates.IsHideNSeek) return true;
 
-        var amount = MessageReader.Get(reader).ReadByte();
-        if (EAC.RpcUpdateSystemCheck(player, systemType, amount))
+        var customMap = CustomMapCompatibility.IsActive;
+        if (customMap && player == null && AmongUsClient.Instance.AmHost) return false;
+
+        var payload = MessageReader.Get(reader);
+        var amount = payload.ReadByte();
+        payload.Recycle();
+        if (!customMap && EAC.RpcUpdateSystemCheck(player, systemType, amount))
         {
             Logger.Info("Eac patched Sabotage RPC", "MessageReaderUpdateSystemPatch");
             return false;
         }
 
         var accepted = UpdateSystemPatch.Prefix(__instance, systemType, player, amount);
-        if (accepted && player && player.IsAlive() && GameStates.IsInTask) AfkMonitor.RecordActivity(player);
-        return accepted;
+        if (!accepted) return false;
+
+        __state = amount;
+        if (player && player.IsAlive() && GameStates.IsInTask) AfkMonitor.RecordActivity(player);
+        return true;
     }
-    public static void Postfix(ShipStatus __instance, [HarmonyArgument(0)] SystemTypes systemType, [HarmonyArgument(1)] PlayerControl player, [HarmonyArgument(2)] MessageReader reader)
+    public static void Postfix(ShipStatus __instance, [HarmonyArgument(0)] SystemTypes systemType, [HarmonyArgument(1)] PlayerControl player, byte? __state)
     {
-        if (systemType is
-            SystemTypes.Ventilation
-            or SystemTypes.Security
-            or SystemTypes.Decontamination
-            or SystemTypes.Decontamination2
-            or SystemTypes.Decontamination3
-            or SystemTypes.MedBay) return;
-
-        if (GameStates.IsHideNSeek) return;
-
-        UpdateSystemPatch.Postfix(__instance, systemType, player, MessageReader.Get(reader).ReadByte());
+        if (__state is byte amount) UpdateSystemPatch.Postfix(__instance, systemType, player, amount);
     }
 }
 

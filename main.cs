@@ -25,6 +25,7 @@ namespace TOHE;
 [BepInPlugin(PluginGuid, "TOHE", PluginVersion)]
 [BepInIncompatibility("jp.ykundesu.supernewroles")]
 [BepInIncompatibility("com.ten.betteramongus")]
+[BepInIncompatibility("com.d1gq.betteramongus")]
 [BepInIncompatibility("com.ten.thebetterroles")]
 [BepInIncompatibility("com.slushiegoose.townofus")]
 [BepInIncompatibility("com.gurge44.endlesshostroles")]
@@ -35,6 +36,13 @@ namespace TOHE;
 [BepInIncompatibility("com.bhr.bedderhostroles")]
 [BepInIncompatibility("dev.allofus.overloaded")]
 [BepInIncompatibility("xyz.crowdedmods.crowdedmod")]
+[BepInIncompatibility("com.tommyxl.unlockdleksehT")]
+[BepInIncompatibility("MalumMenu")]
+[BepInIncompatibility("com.mrd.hydramenu")]
+[BepInIncompatibility("TenkaiMenu")]
+[BepInIncompatibility("CrewCore.CapsuleLoader")]
+[BepInDependency(CustomMapCompatibility.SubmergedGuid, BepInDependency.DependencyFlags.SoftDependency)]
+[BepInDependency(CustomMapCompatibility.LevelImposterGuid, BepInDependency.DependencyFlags.SoftDependency)]
 #if !ANDROID
 [BepInProcess("Among Us.exe")]
 #endif
@@ -634,6 +642,7 @@ public class Main : BasePlugin
         CustomRpcTransport.Register();
 
         Harmony.PatchAll();
+        CustomMapCompatibility.Initialize(Harmony);
 
         TOHE.Logger.Msg("========= TOHE loaded! =========", "Plugin Load");
     }

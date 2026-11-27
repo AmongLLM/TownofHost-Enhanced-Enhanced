@@ -8,7 +8,7 @@ namespace TOHE;
 //参考元 : https://github.com/ykundesu/SuperNewRoles/blob/master/SuperNewRoles/Mode/SuperHostRoles/BlockTool.cs
 class DisableDevice
 {
-    public static bool DoDisable => Options.DisableDevices.GetBool();
+    public static bool DoDisable => Options.DisableDevices.GetBool() && !CustomMapCompatibility.IsActive;
     private static readonly HashSet<byte> DesyncComms = [];
     private static int frame = 0;
     public static readonly Dictionary<string, Vector2> DevicePos = new()
@@ -178,6 +178,8 @@ public class RemoveDisableDevicesPatch
 
     public static void UpdateDisableDevices()
     {
+        if (CustomMapCompatibility.IsActive) return;
+
         var player = PlayerControl.LocalPlayer;
         bool ignore = player.Is(CustomRoles.GM) ||
             !player.IsAlive() ||

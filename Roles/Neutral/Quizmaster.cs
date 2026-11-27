@@ -252,6 +252,7 @@ internal class Quizmaster : RoleBase
                 new DeathReasonQuestion { Stage = 4, Question = "PlrDieFaction", QuizmasterQuestionType = QuizmasterQuestionType.PlrDeathKillerFactionQuestion},
             ];
 
+            if (CustomMapCompatibility.IsActive) Questions.RemoveAll(question => question is SabotageQuestion);
             Question = GetRandomQuestion(Questions);
         }
     }

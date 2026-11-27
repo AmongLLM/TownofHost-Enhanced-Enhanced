@@ -164,7 +164,7 @@ class RandomSpawn
         }
         if (!player.AmOwner) AntiBlackout.OnAirshipSpawn(player);
     }
-    public static bool IsRandomSpawn() => RandomSpawnMode.GetBool();
+    public static bool IsRandomSpawn() => !CustomMapCompatibility.IsActive && RandomSpawnMode.GetBool();
     public static bool CanSpawnInFirstRound() => SpawnInFirstRound.GetBool();
 
     private enum RandomSpawnOpt

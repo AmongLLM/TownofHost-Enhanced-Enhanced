@@ -471,37 +471,26 @@ internal class Alchemist : RoleBase
     public override void UpdateSystem(ShipStatus __instance, SystemTypes systemType, byte amount, PlayerControl player)
     {
         if (!FixNextSabo) return;
+        if (!CustomMapCompatibility.IsSubmergedOxygenRepair(systemType, amount)
+            && (amount is not (64 or 65)
+                || systemType is not (SystemTypes.Reactor or SystemTypes.Laboratory or SystemTypes.LifeSupp or SystemTypes.Comms))) return;
+
         FixNextSabo = false;
 
         switch (systemType)
         {
+            case CustomMapCompatibility.SubmergedOxygenSystem:
+                __instance.RpcUpdateSystem(systemType, 16);
+                break;
             case SystemTypes.Reactor:
-                if (amount is 64 or 65)
-                {
-                    ShipStatus.Instance.RpcUpdateSystem(SystemTypes.Reactor, 16);
-                    ShipStatus.Instance.RpcUpdateSystem(SystemTypes.Reactor, 17);
-                }
+            case SystemTypes.Comms:
+                __instance.RpcUpdateSystem(systemType, 16);
+                __instance.RpcUpdateSystem(systemType, 17);
                 break;
             case SystemTypes.Laboratory:
-                if (amount is 64 or 65)
-                {
-                    ShipStatus.Instance.RpcUpdateSystem(SystemTypes.Laboratory, 67);
-                    ShipStatus.Instance.RpcUpdateSystem(SystemTypes.Laboratory, 66);
-                }
-                break;
             case SystemTypes.LifeSupp:
-                if (amount is 64 or 65)
-                {
-                    ShipStatus.Instance.RpcUpdateSystem(SystemTypes.LifeSupp, 67);
-                    ShipStatus.Instance.RpcUpdateSystem(SystemTypes.LifeSupp, 66);
-                }
-                break;
-            case SystemTypes.Comms:
-                if (amount is 64 or 65)
-                {
-                    ShipStatus.Instance.RpcUpdateSystem(SystemTypes.Comms, 16);
-                    ShipStatus.Instance.RpcUpdateSystem(SystemTypes.Comms, 17);
-                }
+                __instance.RpcUpdateSystem(systemType, 67);
+                __instance.RpcUpdateSystem(systemType, 66);
                 break;
         }
     }

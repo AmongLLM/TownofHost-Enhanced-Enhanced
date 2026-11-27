@@ -29,7 +29,8 @@ internal static class RoleAssignmentCatalog
             CustomRoles? preset = null;
             if ((pc.AmOwner && Main.EnableGM.Value) || TOHE.Modules.PlayerTagFiles.IsGameMaster(pc))
                 preset = CustomRoles.GM;
-            else if (RoleAssign.SetRoles.TryGetValue(pc.PlayerId, out var role) && IsValidPreset(role)) preset = role;
+            else if (RoleAssign.SetRoles.TryGetValue(pc.PlayerId, out var role) && IsValidPreset(role) && role.GetStaticRoleClass().IsAvailableOnMap())
+                preset = role;
             return new RoleAssignmentPlayer(pc.PlayerId, preset, preset.HasValue ? TeamOf(preset.Value) : AssignmentTeam.None);
         }).ToArray();
 
@@ -50,6 +51,7 @@ internal static class RoleAssignmentCatalog
                 or CustomRoles.NotAssigned or CustomRoles.NiceMini or CustomRoles.EvilMini) continue;
             if (role == CustomRoles.Stalker && GameStates.FungleIsActive) continue;
             if (role == CustomRoles.Doctor && Options.EveryoneCanSeeDeathReason.GetBool()) continue;
+            if (!role.GetStaticRoleClass().IsAvailableOnMap()) continue;
             var resolved = role == CustomRoles.Mini
                 ? (Mini.IsEvilMini ? CustomRoles.EvilMini : CustomRoles.NiceMini) : role;
             candidates.Add(new(resolved, TeamOf(resolved), chance, role.GetCount()));

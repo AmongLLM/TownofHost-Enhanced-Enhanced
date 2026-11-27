@@ -42,6 +42,7 @@ class AllMapIconsPatch
     public static void Postfix_AllMapIcons(GameStartManager __instance)
     {
         if (__instance == null) return;
+        CreateOptionsPickerPatch.SetDleks = false;
 
         if (GameStates.IsNormalGame && Main.NormalOptions.MapId == 3)
         {

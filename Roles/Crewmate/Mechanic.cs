@@ -78,16 +78,21 @@ internal class Mechanic : RoleBase
                     SendSkillRPC();
                 }
                 break;
-            case SystemTypes.LifeSupp:
+            case SystemTypes.LifeSupp when amount is 64 or 65:
+            case CustomMapCompatibility.SubmergedOxygenSystem when CustomMapCompatibility.IsSubmergedOxygenRepair(systemType, amount):
                 if (!FixesOxygens.GetBool()) break;
                 if (SkillLimit.GetFloat() > 0 && AbilityLimit + UsesUsedWhenFixingReactorOrO2.GetFloat() - 1 <= 0) break;
-                if (amount is 64 or 65)
+                if (systemType == CustomMapCompatibility.SubmergedOxygenSystem)
+                {
+                    __instance.RpcUpdateSystem(systemType, 16);
+                }
+                else
                 {
                     __instance.RpcUpdateSystem(SystemTypes.LifeSupp, 67);
                     __instance.RpcUpdateSystem(SystemTypes.LifeSupp, 66);
-                    AbilityLimit -= UsesUsedWhenFixingReactorOrO2.GetFloat();
-                    SendSkillRPC();
                 }
+                AbilityLimit -= UsesUsedWhenFixingReactorOrO2.GetFloat();
+                SendSkillRPC();
                 break;
             case SystemTypes.Comms:
                 if (!FixesComms.GetBool()) break;

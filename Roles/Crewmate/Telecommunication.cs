@@ -16,6 +16,7 @@ internal class Telecommunication : RoleBase
 
     public override CustomRoles ThisRoleBase => CanVent.GetBool() ? CustomRoles.Engineer : CustomRoles.Crewmate;
     public override Custom_RoleType ThisRoleType => Custom_RoleType.CrewmatePower;
+    public override bool IsAvailableOnMap() => !CustomMapCompatibility.IsActive;
     //==================================================================\\
 
     private static OptionItem CanCheckCamera;

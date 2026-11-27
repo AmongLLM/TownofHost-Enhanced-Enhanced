@@ -23,6 +23,9 @@ public abstract class RoleBase
     public virtual bool IsDesyncRole => false;
     public virtual bool IsSideKick => false;
 
+    /// <summary>Checks the current map on the role definition before assigning players.</summary>
+    public virtual bool IsAvailableOnMap() => true;
+
     public void OnInit() // CustomRoleManager.RoleClass executes this
     {
         IsEnable = false;

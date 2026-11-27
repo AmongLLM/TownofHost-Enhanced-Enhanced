@@ -132,19 +132,7 @@ internal class Pelican : RoleBase
 
         return target != null && target.CanBeTeleported() && !target.IsTransformedNeutralApocalypse() && !Medic.IsProtected(target.PlayerId) && !target.Is(CustomRoles.GM) && !IsEaten(pc, id);
     }
-    public static Vector2 GetBlackRoomPSForPelican()
-    {
-        return Utils.GetActiveMapId() switch
-        {
-            0 => new Vector2(-27f, 3.3f), // The Skeld
-            1 => new Vector2(-11.4f, 8.2f), // MIRA HQ
-            2 => new Vector2(42.6f, -19.9f), // Polus
-            3 => new Vector2(27f, 3.3f), // dlekS ehT
-            4 => new Vector2(-16.8f, -6.2f), // Airship
-            5 => new Vector2(9.6f, 23.2f), // The Fungle
-            _ => throw new System.NotImplementedException(),
-        };
-    }
+    public static Vector2 GetBlackRoomPSForPelican() => ExtendedPlayerControl.GetBlackRoomPosition(forPelican: true);
     public override void ApplyGameOptions(IGameOptions opt, byte id) => opt.SetVision(HasImpostorVision.GetBool());
 
     public override string GetProgressText(byte playerId, bool coooms)

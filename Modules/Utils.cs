@@ -141,23 +141,37 @@ public static class Utils
     }
 
     public static bool AnySabotageIsActive()
-        => IsActive(SystemTypes.Electrical)
+    {
+        if (CustomMapCompatibility.IsActive)
+        {
+            return !GameStates.IsHideNSeek && ShipStatus.Instance
+                && ShipStatus.Instance.Systems.TryGetValue(SystemTypes.Sabotage, out var system)
+                && system.TryCast<SabotageSystemType>()?.AnyActive == true;
+        }
+
+        return IsActive(SystemTypes.Electrical)
            || IsActive(SystemTypes.Comms)
            || IsActive(SystemTypes.MushroomMixupSabotage)
            || IsActive(SystemTypes.Laboratory)
            || IsActive(SystemTypes.LifeSupp)
            || IsActive(SystemTypes.Reactor)
            || IsActive(SystemTypes.HeliSabotage);
+    }
 
     public static bool IsActive(SystemTypes type)
     {
         if (GameStates.IsHideNSeek) return false;
 
+        if (type == SystemTypes.LifeSupp && CustomMapCompatibility.IsSubmergedShip)
+            type = CustomMapCompatibility.SubmergedOxygenSystem;
+
         // if ShipStatus not have current SystemTypes, return false
-        if (!ShipStatus.Instance.Systems.ContainsKey(type))
+        if (!ShipStatus.Instance.Systems.TryGetValue(type, out var system))
         {
             return false;
         }
+
+        if (CustomMapCompatibility.IsActive) return system.TryCast<IActivatable>()?.IsActive == true;
 
         var mapName = GetActiveMapName();
         /*
@@ -176,7 +190,7 @@ public static class Utils
             case SystemTypes.Electrical:
                 {
                     if (mapName is MapNames.Fungle) return false; // if The Fungle return false
-                    var SwitchSystem = ShipStatus.Instance.Systems[type].TryCast<SwitchSystem>();
+                    var SwitchSystem = system.TryCast<SwitchSystem>();
                     return SwitchSystem != null && SwitchSystem.IsActive;
                 }
             case SystemTypes.Reactor:
@@ -184,45 +198,45 @@ public static class Utils
                     if (mapName is MapNames.Polus) return false; // if Polus return false
                     else
                     {
-                        var ReactorSystemType = ShipStatus.Instance.Systems[type].TryCast<ReactorSystemType>();
+                        var ReactorSystemType = system.TryCast<ReactorSystemType>();
                         return ReactorSystemType != null && ReactorSystemType.IsActive;
                     }
                 }
             case SystemTypes.Laboratory:
                 {
                     if (mapName is not MapNames.Polus) return false; // Only Polus
-                    var ReactorSystemType = ShipStatus.Instance.Systems[type].TryCast<ReactorSystemType>();
+                    var ReactorSystemType = system.TryCast<ReactorSystemType>();
                     return ReactorSystemType != null && ReactorSystemType.IsActive;
                 }
             case SystemTypes.HeliSabotage:
                 {
                     if (mapName is not MapNames.Airship) return false; // Only Airhip
-                    var HeliSabotageSystem = ShipStatus.Instance.Systems[type].TryCast<HeliSabotageSystem>();
+                    var HeliSabotageSystem = system.TryCast<HeliSabotageSystem>();
                     return HeliSabotageSystem != null && HeliSabotageSystem.IsActive;
                 }
             case SystemTypes.LifeSupp:
                 {
                     if (mapName is MapNames.Polus or MapNames.Airship or MapNames.Fungle) return false; // Only Skeld & Dleks & Mira HQ
-                    var LifeSuppSystemType = ShipStatus.Instance.Systems[type].TryCast<LifeSuppSystemType>();
+                    var LifeSuppSystemType = system.TryCast<LifeSuppSystemType>();
                     return LifeSuppSystemType != null && LifeSuppSystemType.IsActive;
                 }
             case SystemTypes.Comms:
                 {
                     if (mapName is MapNames.MiraHQ or MapNames.Fungle) // Only Mira HQ & The Fungle
                     {
-                        var HqHudSystemType = ShipStatus.Instance.Systems[type].TryCast<HqHudSystemType>();
+                        var HqHudSystemType = system.TryCast<HqHudSystemType>();
                         return HqHudSystemType != null && HqHudSystemType.IsActive;
                     }
                     else
                     {
-                        var HudOverrideSystemType = ShipStatus.Instance.Systems[type].TryCast<HudOverrideSystemType>();
+                        var HudOverrideSystemType = system.TryCast<HudOverrideSystemType>();
                         return HudOverrideSystemType != null && HudOverrideSystemType.IsActive;
                     }
                 }
             case SystemTypes.MushroomMixupSabotage:
                 {
                     if (mapName is not MapNames.Fungle) return false; // Only The Fungle
-                    var MushroomMixupSabotageSystem = ShipStatus.Instance.Systems[type].TryCast<MushroomMixupSabotageSystem>();
+                    var MushroomMixupSabotageSystem = system.TryCast<MushroomMixupSabotageSystem>();
                     return MushroomMixupSabotageSystem != null && MushroomMixupSabotageSystem.IsActive;
                 }
             default:
