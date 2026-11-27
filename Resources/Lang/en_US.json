@@ -1118,6 +1118,7 @@
   "WraithVentNormallyOnCooldown": "<color=#4b0082>Wraith</color> vents normally when invis is on cooldown",
   "DisableMeeting": "Disable Meetings",
   "DisableCloseDoor": "Disable Doors Sabotage",
+  "DisableVenting1v1": "Disable Venting in 1v1s",
   "DisableSabotage": "Disable Sabotages",
   "NoGameEnd": "No Game End",
   "AllowConsole": "BepInEx Console",

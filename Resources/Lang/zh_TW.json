@@ -1048,6 +1048,7 @@
   "WraithVentNormallyOnCooldown": "<color=#4b0082>幻影</color>在冷卻時可以正常使用通風口",
   "DisableMeeting": "禁用緊急會議以及報告屍體",
   "DisableCloseDoor": "禁用關門",
+  "DisableVenting1v1": "僅剩兩名玩家時禁用鑽管",
   "DisableSabotage": "禁用破壞",
   "NoGameEnd": "測試模式(遊戲不結束)",
   "AllowConsole": "開啟控制台(可能會被用於作弊)",

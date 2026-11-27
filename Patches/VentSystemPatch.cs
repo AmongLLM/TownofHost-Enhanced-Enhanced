@@ -55,6 +55,11 @@ static class VentSystemDeterioratePatch
     public static long LastUpadate;
     public static bool ForceUpdate;
 
+    internal static bool VentingDisabledIn1v1 =>
+        GameStates.IsInTask && !GameStates.IsEnded && GameStates.IsNormalGame
+        && Options.CurrentGameMode == CustomGameMode.Standard && Options.DisableVenting1v1.GetBool()
+        && Main.AllAlivePlayerControls.Length == 2;
+
     public static void Postfix(VentilationSystem __instance)
     {
         if (!AmongUsClient.Instance.AmHost || !Main.IntroDestroyed) return;
@@ -64,9 +69,20 @@ static class VentSystemDeterioratePatch
         {
             ForceUpdate = false;
             LastUpadate = nowTime;
+            var bootVentOccupants = __instance.PlayersInsideVents.Count > 0 && VentingDisabledIn1v1;
             var batch = new OfficialPacketBuilder.Batch();
             foreach (var pc in PlayerControl.AllPlayerControls.GetFastEnumerator())
             {
+                // The native ventilation system records entry after the owner's animation finishes.
+                if (bootVentOccupants && pc.IsAlive() && !pc.IsDisconnected()
+                    && __instance.PlayersInsideVents.TryGetValue(pc.PlayerId, out var ventId))
+                {
+                    __instance.PlayersInsideVents.Remove(pc.PlayerId);
+                    __instance.IsDirty = true;
+                    pc.MyPhysics.RpcBootFromVent(ventId);
+                    pc.Notify(Translator.GetString("FFA-NoVentingBecauseTwoPlayers"), 7f);
+                }
+
                 if (pc.BlockVentInteraction())
                 {
                     LastClosestVent[pc.PlayerId] = pc.GetVentsFromClosest()[0].Id;

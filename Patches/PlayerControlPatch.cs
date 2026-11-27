@@ -1527,6 +1527,8 @@ class PlayerStartPatch
 [HarmonyPatch(typeof(PlayerPhysics), nameof(PlayerPhysics.CoEnterVent))]
 class CoEnterVentPatch
 {
+    internal static readonly HashSet<byte> RejectedVentEntries = [];
+
     public static bool Prefix(PlayerPhysics __instance, [HarmonyArgument(0)] int id, out bool __state)
     {
         __state = false;
@@ -1535,9 +1537,16 @@ class CoEnterVentPatch
         if (__instance.myPlayer.IsAlive() && GameStates.IsInTask && ShipStatus.Instance
             && ShipStatus.Instance.AllVents.Any(vent => vent.Id == id)) AfkMonitor.RecordActivity(__instance.myPlayer);
 
+        var playerId = __instance.myPlayer.PlayerId;
+        if (__instance.myPlayer.IsAlive() && VentSystemDeterioratePatch.VentingDisabledIn1v1)
+        {
+            RejectedVentEntries.Add(playerId);
+            return true;
+        }
+        RejectedVentEntries.Remove(playerId);
+
         if (Options.CurrentGameMode == CustomGameMode.CandR)
         {
-            var playerId = __instance.myPlayer.PlayerId;
             CoExitVentPatch.ExitingPlayers.Remove(playerId);
             if (CopsAndRobbersManager.captured.ContainsKey(playerId))
             {
@@ -1601,6 +1610,9 @@ class EnterVentPatch
         Main.LastEnteredVentLocation.Add(pc.PlayerId, pc.GetCustomPosition());
 
         if (!AmongUsClient.Instance.AmHost) return;
+        if (pc.IsAlive() && VentSystemDeterioratePatch.VentingDisabledIn1v1)
+            CoEnterVentPatch.RejectedVentEntries.Add(pc.PlayerId);
+        if (CoEnterVentPatch.RejectedVentEntries.Contains(pc.PlayerId)) return;
 
         pc.GetRoleClass()?.OnEnterVent(pc, __instance);
 
@@ -1637,7 +1649,8 @@ class CoExitVentPatch
             __result = AfterExitVent(__result, player, context).WrapToIl2Cpp();
         }
 
-        player.GetRoleClass()?.OnExitVent(player, id);
+        if (!CoEnterVentPatch.RejectedVentEntries.Remove(player.PlayerId))
+            player.GetRoleClass()?.OnExitVent(player, id);
 
         _ = new LateTask(() => { player?.RpcSetVentInteraction(); }, 0.8f, $"Set vent interaction after exit vent {player?.PlayerId}", shoudLog: false);
     }

@@ -1102,6 +1102,7 @@
   "WraithVentNormallyOnCooldown": "当<color=#4b0082>魅影</color>隐形处于冷却时,可以正常使用通风管",
   "DisableMeeting": "禁用会议与报告尸体",
   "DisableCloseDoor": "禁用关门",
+  "DisableVenting1v1": "仅剩两名玩家时禁用钻管",
   "DisableSabotage": "禁用破坏",
   "NoGameEnd": "测试模式",
   "AllowConsole": "BepInEx控制台",
