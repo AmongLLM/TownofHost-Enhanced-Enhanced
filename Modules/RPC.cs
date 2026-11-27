@@ -133,7 +133,7 @@ enum CustomRPC : uint
     RequestOptionChunks,
     SyncCandRData = 202,
     SyncSpeedrunData = 203,
-    SyncDeadPassedMeetingList,
+    SyncDeadPassedMeetingList = 204,
 }
 public enum Sounds
 {
@@ -821,10 +821,13 @@ internal class RPCHandlerPatch
                 AfkMonitor.ReceiveState(__instance, reader);
                 break;
             case CustomRPC.SyncDeadPassedMeetingList:
+                if (!isLocalRecipient || reader.BytesRemaining == 0) break;
+                var deadCount = reader.ReadByte();
+                if (deadCount != reader.BytesRemaining) break;
                 Main.DeadPassedMeetingPlayers.Clear();
-                var pnum = reader.ReadPackedInt32();
-                for (int i = 0; i < pnum; i++)
+                for (int i = 0; i < deadCount; i++)
                     Main.DeadPassedMeetingPlayers.Add(reader.ReadByte());
+                MeetingHudStartPatch.RefreshGhostRoleText();
                 break;
         }
     }
@@ -1139,13 +1142,12 @@ internal static class RPC
     public static void SyncDeadPassedMeetingList()
     {
         if (!AmongUsClient.Instance.AmHost) return;
-        MessageWriter writer = CustomRpcTransport.Start(CustomRPC.SyncDeadPassedMeetingList, SendOption.Reliable, -1);
-        writer.WritePacked(Main.DeadPassedMeetingPlayers.Count);
-        foreach (var dead in Main.DeadPassedMeetingPlayers)
+        CustomRpcTransport.SendPayload(CustomRPC.SyncDeadPassedMeetingList, writer =>
         {
-            writer.Write(dead);
-        }
-        CustomRpcTransport.Finish(writer);
+            writer.Write((byte)Main.DeadPassedMeetingPlayers.Count);
+            foreach (var playerId in Main.DeadPassedMeetingPlayers)
+                writer.Write(playerId);
+        });
     }
     public static void SendRpcLogger(uint targetNetId, byte callId, int targetClientId = -1)
     {

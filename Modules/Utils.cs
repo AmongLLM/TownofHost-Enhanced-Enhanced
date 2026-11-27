@@ -2163,7 +2163,7 @@ public static class Utils
                         {
                             TargetMark.Append($"<color={GetRoleColorCode(CustomRoles.Lovers)}>♥</color>");
                         }
-                        else if (seer.Data.IsDead && !seer.Is(CustomRoles.Lovers) && target.Is(CustomRoles.Lovers))
+                        else if (seer.CanSeeOtherRolesAsGhost() && target.Is(CustomRoles.Lovers))
                         {
                             TargetMark.Append($"<color={GetRoleColorCode(CustomRoles.Lovers)}>♥</color>");
                         }
@@ -2461,7 +2461,6 @@ public static class Utils
         if (Options.AirshipVariableElectrical.GetBool())
             AirshipElectricalDoors.Initialize();
 
-        RPC.SyncDeadPassedMeetingList();
         DoorsReset.ResetDoors();
 
         // Empty Deden bug support Empty vent after meeting

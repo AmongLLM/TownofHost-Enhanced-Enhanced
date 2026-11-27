@@ -402,6 +402,8 @@ public static class Options
     public static OptionItem GhostIgnoreTasks;
     public static OptionItem GhostCanSeeOtherRoles;
     public static OptionItem PreventSeeRolesImmediatelyAfterDeath;
+    internal static bool DelaysGhostRoleVisibility => !GameStates.IsFreePlay
+        && CurrentGameMode == CustomGameMode.Standard && PreventSeeRolesImmediatelyAfterDeath.GetBool();
     public static OptionItem GhostCanSeeOtherVotes;
     public static OptionItem GhostCanSeeDeathReason;
     public static OptionItem ConvertedCanBecomeGhost;

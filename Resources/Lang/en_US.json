@@ -1238,7 +1238,7 @@
   "FixKillCooldownValue": "Starting Kill Cooldown",
   "OverclockedReduction": "Kill Cooldown Reduction",
   "GhostCanSeeOtherRoles": "Ghosts Can See Other Roles",
-  "PreventSeeRolesImmediatelyAfterDeath": "Prevent seeing other's roles immediately after death",
+  "PreventSeeRolesImmediatelyAfterDeath": "Hide Other Roles Until the Next Meeting",
   "GhostCanSeeOtherVotes": "Ghosts Can See Vote Colors",
   "GhostCanSeeDeathReason": "Ghost Can See Cause Of Death",
   "GhostIgnoreTasks": "Ghosts Exempt From Tasks",
@@ -1937,6 +1937,7 @@
   "HackLimit": "Ability Use Count",
   "ZombieSpeedReduce": "After a certain time, decrease the speed of <color=#ff1919>Zombie</color> by",
   "NemesisCanKillNum": "Max number of revenges",
+  "PreventSeeRolesBeforeSkillUsedUp": "Hide Other Roles While Revenge Uses Remain",
   "ImpKnowCelebrityDead": "<color=#ff1919>Impostors</color> know when the <color=#ee4a55>Celebrity</color> dies",
   "NeutralKnowCelebrityDead": "<color=#7f8c8d>Neutrals</color> know when the <color=#ee4a55>Celebrity</color> dies",
   "VectorVentNumWin": "Number of Vents to win",
@@ -4302,6 +4303,5 @@
   "ChiefOfPolice": "Police Commissioner",
   "SpeedBooster": "Speed Booster",
   "NotAssigned": "Not Assigned",
-  "CoinflipCommandInfo": "<b>This Command can only be used when in the lobby or after you die.</b>",
-  "PreventSeeRolesBeforeSkillUsedUp": "Prevent seeing others roles before skill used up"
+  "CoinflipCommandInfo": "<b>This Command can only be used when in the lobby or after you die.</b>"
 }

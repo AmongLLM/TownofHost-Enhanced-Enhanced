@@ -808,6 +808,41 @@ class MeetingHudStartPatch
     public static List<(string, byte, string)> msgToSend = [];
     public static void AddMsg(string text, byte sendTo = 255, string title = "")
         => msgToSend.Add((text, sendTo, title));
+
+    internal static void RefreshGhostRoleText()
+    {
+        var meeting = MeetingHud.Instance;
+        var seer = PlayerControl.LocalPlayer;
+        if (meeting == null || seer == null || seer.IsAlive()) return;
+
+        foreach (var pva in meeting.playerStates)
+        {
+            var target = GetPlayerById(pva.PlayerId.Value);
+            if (target == null) continue;
+
+            var roleText = pva.NameText.transform.FindChild("RoleTextMeeting");
+            if (roleText != null) SetMeetingRoleText(roleText.GetComponent<TextMeshPro>(), seer, target);
+        }
+    }
+
+    private static void SetMeetingRoleText(TextMeshPro roleText, PlayerControl seer, PlayerControl target)
+    {
+        var (text, color) = GetRoleAndSubText(seer.PlayerId, target.PlayerId, isMeeting: true, useShortNames: true);
+        roleText.text = Main.VisibleTasksCount ? text + GetProgressText(target) : text;
+        roleText.color = color;
+        roleText.enabled = target.AmOwner || ExtendedPlayerControl.KnowRoleTarget(seer, target);
+
+        if (!seer.Data.IsDead && Overseer.IsRevealedPlayer(seer, target) && target.Is(CustomRoles.Trickster))
+            roleText.text = Overseer.GetRandomRole(seer.PlayerId) + TaskState.GetTaskState();
+
+        var suffix = seer.GetRoleClass()?.GetSuffix(seer, target, isForMeeting: true)
+            + CustomRoleManager.GetSuffixOthers(seer, target, isForMeeting: true);
+        if (suffix.Length == 0) return;
+
+        roleText.text = suffix;
+        roleText.enabled = true;
+    }
+
     public static void NotifyRoleSkillOnMeetingStart()
     {
         if (!AmongUsClient.Instance.AmHost) return;
@@ -981,19 +1016,15 @@ class MeetingHudStartPatch
             var textTemplate = pva.NameText;
 
             // Create role text in meeting
-            var RoleTextData = GetRoleAndSubText(PlayerControl.LocalPlayer.PlayerId, pc.PlayerId, isMeeting: true, useShortNames: true);
             var roleTextMeeting = UnityEngine.Object.Instantiate(textTemplate);
             if (roleTextMeeting.transform.FindChild("DeathReasonTextMeeting") != null)
                 UnityEngine.Object.Destroy(roleTextMeeting.transform.FindChild("DeathReasonTextMeeting").gameObject);
             roleTextMeeting.transform.SetParent(textTemplate.transform);
             roleTextMeeting.transform.localPosition = new Vector3(0f, -0.18f, 0f);
             roleTextMeeting.fontSize = 1.6f;
-            roleTextMeeting.text = RoleTextData.Item1;
-            if (Main.VisibleTasksCount) roleTextMeeting.text += GetProgressText(pc);
-            roleTextMeeting.color = RoleTextData.Item2;
             roleTextMeeting.gameObject.name = "RoleTextMeeting";
             roleTextMeeting.enableWordWrapping = false;
-            roleTextMeeting.enabled = pc.AmOwner || ExtendedPlayerControl.KnowRoleTarget(PlayerControl.LocalPlayer, pc);
+            SetMeetingRoleText(roleTextMeeting, PlayerControl.LocalPlayer, pc);
 
             // Create death reason text in meeting
             var deathReasonText = UnityEngine.Object.Instantiate(textTemplate);
@@ -1023,32 +1054,6 @@ class MeetingHudStartPatch
             IdLabel.name = "IdLabel";
             IdNumber.name = "IdNumber";
 
-            var myRole = PlayerControl.LocalPlayer.GetRoleClass();
-            var enable = true;
-
-            if (!PlayerControl.LocalPlayer.Data.IsDead && Overseer.IsRevealedPlayer(PlayerControl.LocalPlayer, pc) && pc.Is(CustomRoles.Trickster))
-            {
-                roleTextMeeting.text = Overseer.GetRandomRole(PlayerControl.LocalPlayer.PlayerId); // random role for revealed trickster
-                roleTextMeeting.text += TaskState.GetTaskState(); // Random task count for revealed trickster
-                //enable = false;
-            }
-
-            var suffixBuilder = new StringBuilder(32);
-            if (myRole != null)
-            {
-                suffixBuilder.Append(myRole.GetSuffix(PlayerControl.LocalPlayer, pc, isForMeeting: true));
-            }
-            suffixBuilder.Append(CustomRoleManager.GetSuffixOthers(PlayerControl.LocalPlayer, pc, isForMeeting: true));
-
-            // If Doppelganger.CurrentVictimCanSeeRolesAsDead is disabled and player is the most recent victim from the doppelganger hide role information for player.
-            var player = PlayerControl.LocalPlayer;
-            var target = GetPlayerById(pva.PlayerId.Value);
-
-            if (suffixBuilder.Length > 0)
-            {
-                roleTextMeeting.text = suffixBuilder.ToString();
-                roleTextMeeting.enabled = enable;
-            }
         }
 
         if (Options.SyncButtonMode.GetBool())
@@ -1174,7 +1179,7 @@ class MeetingHudStartPatch
                 switch (TargetSubRole)
                 {
                     case CustomRoles.Lovers:
-                        if (seer.Is(CustomRoles.Lovers) || seer.Data.IsDead)
+                        if (seer.Is(CustomRoles.Lovers) || seer.CanSeeOtherRolesAsGhost())
                         {
                             sb.Append(ColorString(GetRoleColor(CustomRoles.Lovers), "♥"));
                             //isLover = true;
