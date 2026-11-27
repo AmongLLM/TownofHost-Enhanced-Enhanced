@@ -401,6 +401,9 @@ public static class Options
     // Ghost
     public static OptionItem GhostIgnoreTasks;
     public static OptionItem GhostCanSeeOtherRoles;
+    public static OptionItem PreventSeeRolesImmediatelyAfterDeath;
+    internal static bool DelaysGhostRoleVisibility => !GameStates.IsFreePlay
+        && CurrentGameMode == CustomGameMode.Standard && PreventSeeRolesImmediatelyAfterDeath.GetBool();
     public static OptionItem GhostCanSeeOtherVotes;
     public static OptionItem GhostCanSeeDeathReason;
     public static OptionItem ConvertedCanBecomeGhost;
@@ -1889,6 +1892,10 @@ public static class Options
             .SetHeader(true)
             .SetColor(new Color32(217, 218, 255, byte.MaxValue));
         GhostCanSeeOtherRoles = BooleanOptionItem.Create(60810, "GhostCanSeeOtherRoles", true, TabGroup.ModSettings, false)
+            .SetGameMode(CustomGameMode.Standard)
+            .SetColor(new Color32(217, 218, 255, byte.MaxValue));
+        PreventSeeRolesImmediatelyAfterDeath = BooleanOptionItem.Create(60821, "PreventSeeRolesImmediatelyAfterDeath", true, TabGroup.ModSettings, false)
+            .SetParent(GhostCanSeeOtherRoles)
             .SetGameMode(CustomGameMode.Standard)
             .SetColor(new Color32(217, 218, 255, byte.MaxValue));
         GhostCanSeeOtherVotes = BooleanOptionItem.Create(60820, "GhostCanSeeOtherVotes", true, TabGroup.ModSettings, false)

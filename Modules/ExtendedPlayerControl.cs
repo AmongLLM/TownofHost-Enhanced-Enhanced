@@ -93,6 +93,8 @@ static class ExtendedPlayerControl
         var customRole = player.GetCustomRole();
         Main.PlayerStates[player.PlayerId].IsDead = false;
         Main.PlayerStates[player.PlayerId].deathReason = PlayerState.DeathReason.etc;
+        if (Main.DeadPassedMeetingPlayers.Remove(player.PlayerId))
+            RPC.SyncDeadPassedMeetingList();
 
         player.RpcChangeRoleBasis(customRole, true);
         player.ResetKillCooldown();
@@ -1356,6 +1358,14 @@ static class ExtendedPlayerControl
         => (seer.Is(CustomRoles.Visionary))
         && !target.Data.IsDead;
 
+    public static bool CanSeeOtherRolesAsGhost(this PlayerControl seer)
+        => seer != null && !seer.IsAlive()
+            && Options.GhostCanSeeOtherRoles.GetBool()
+            && (!Options.DelaysGhostRoleVisibility || Main.DeadPassedMeetingPlayers.Contains(seer.PlayerId))
+            && !(Altruist.HasEnabled && seer.IsMurderedThisRound())
+            && !Nemesis.PreventKnowRole(seer)
+            && !Retributionist.PreventKnowRole(seer);
+
     private readonly static LogHandler logger = Logger.Handler("KnowRoleTarget");
     public static bool KnowRoleTarget(PlayerControl seer, PlayerControl target)
     {
@@ -1363,7 +1373,7 @@ static class ExtendedPlayerControl
         else if (seer.Is(CustomRoles.GM) || target.Is(CustomRoles.GM) || (PlayerControl.LocalPlayer.PlayerId == seer.PlayerId && Main.GodMode.Value)) return true;
         else if (Options.SeeEjectedRolesInMeeting.GetBool() && Main.PlayerStates[target.PlayerId].deathReason == PlayerState.DeathReason.Vote) return true;
         else if (Altruist.HasEnabled && seer.IsMurderedThisRound()) return false;
-        else if (!seer.IsAlive() && Options.GhostCanSeeOtherRoles.GetBool()) return true;
+        else if (seer.CanSeeOtherRolesAsGhost()) return true;
         else if (seer.GetCustomRole() == target.GetCustomRole() && seer.GetCustomRole().IsNK()) return true;
         else if (Options.LoverKnowRoles.GetBool() && seer.Is(CustomRoles.Lovers) && target.Is(CustomRoles.Lovers)) return true;
         else if (Options.ImpsCanSeeEachOthersRoles.GetBool() && seer.Is(Custom_Team.Impostor) && target.Is(Custom_Team.Impostor)) return true;
@@ -1383,7 +1393,6 @@ static class ExtendedPlayerControl
         else if (Infectious.KnowRole(seer, target)) return true;
         else if (Virus.KnowRole(seer, target)) return true;
 
-
         else return false;
     }
     public static bool ShowSubRoleTarget(this PlayerControl seer, PlayerControl target, CustomRoles subRole = CustomRoles.NotAssigned)
@@ -1393,7 +1402,7 @@ static class ExtendedPlayerControl
 
         if (seer.PlayerId == target.PlayerId) return true;
         else if (seer.Is(CustomRoles.GM) || target.Is(CustomRoles.GM) || seer.Is(CustomRoles.God) || (seer.IsHost() && Main.GodMode.Value)) return true;
-        else if (!seer.IsAlive() && Options.GhostCanSeeOtherRoles.GetBool()) return true;
+        else if (seer.CanSeeOtherRolesAsGhost()) return true;
         else if (Options.ImpsCanSeeEachOthersAddOns.GetBool() && seer.Is(Custom_Team.Impostor) && target.Is(Custom_Team.Impostor) && !subRole.IsBetrayalAddon()) return true;
         else if (Options.ApocCanSeeEachOthersAddOns.GetBool() && seer.IsNeutralApocalypse() && target.IsNeutralApocalypse() && !subRole.IsBetrayalAddon()) return true;
 
@@ -1407,7 +1416,6 @@ static class ExtendedPlayerControl
                 or CustomRoles.Egoist)
             && KnowSubRoleTarget(seer, target))
             return true;
-
 
         return false;
     }

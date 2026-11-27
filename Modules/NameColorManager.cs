@@ -96,7 +96,7 @@ public static class NameColorManager
             || (Main.GodMode.Value && seer.IsHost())
             || (Options.CurrentGameMode == CustomGameMode.FFA)
             || seer.Is(CustomRoles.GM) || target.Is(CustomRoles.GM)
-            || (!seer.IsAlive() && Options.GhostCanSeeOtherRoles.GetBool())
+            || seer.CanSeeOtherRolesAsGhost()
             || target.GetRoleClass().OthersKnowTargetRoleColor(seer, target)
             || Mimic.CanSeeDeadRoles(seer, target)
             || (seer.Is(Custom_Team.Impostor) && target.Is(Custom_Team.Impostor))

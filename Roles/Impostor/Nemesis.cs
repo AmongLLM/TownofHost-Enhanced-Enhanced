@@ -1,5 +1,6 @@
 ﻿using AmongUs.GameOptions;
 using Hazel;
+using InnerNet;
 using TOHE.Modules;
 using TOHE.Roles.Double;
 using UnityEngine;
@@ -24,6 +25,7 @@ internal class Nemesis : RoleBase
     public static OptionItem LegacyNemesis;
     private static OptionItem NemesisShapeshiftCD;
     private static OptionItem NemesisShapeshiftDur;
+    private static OptionItem PreventSeeRolesBeforeSkillUsedUp;
 
     private static readonly Dictionary<byte, int> NemesisRevenged = [];
 
@@ -33,6 +35,8 @@ internal class Nemesis : RoleBase
         NemesisCanKillNum = IntegerOptionItem.Create(Id + 10, "NemesisCanKillNum", new(0, 15, 1), 1, TabGroup.ImpostorRoles, false)
             .SetParent(CustomRoleSpawnChances[CustomRoles.Nemesis])
                 .SetValueFormat(OptionFormat.Players);
+        PreventSeeRolesBeforeSkillUsedUp = BooleanOptionItem.Create(Id + 14, "PreventSeeRolesBeforeSkillUsedUp", true, TabGroup.ImpostorRoles, false)
+            .SetParent(CustomRoleSpawnChances[CustomRoles.Nemesis]);
         LegacyNemesis = BooleanOptionItem.Create(Id + 11, "LegacyNemesis", false, TabGroup.ImpostorRoles, false)
                 .SetParent(CustomRoleSpawnChances[CustomRoles.Nemesis]);
         NemesisShapeshiftCD = FloatOptionItem.Create(Id + 12, GeneralOption.ShapeshifterBase_ShapeshiftCooldown, new(1f, 180f, 1f), 15f, TabGroup.ImpostorRoles, false)
@@ -57,6 +61,9 @@ internal class Nemesis : RoleBase
         AURoleOptions.ShapeshifterCooldown = NemesisShapeshiftCD.GetFloat();
         AURoleOptions.ShapeshifterDuration = NemesisShapeshiftDur.GetFloat();
     }
+    public static bool PreventKnowRole(PlayerControl seer) =>
+        seer.Is(CustomRoles.Nemesis) && PreventSeeRolesBeforeSkillUsedUp.GetBool()
+        && NemesisRevenged.GetValueOrDefault(seer.PlayerId) < NemesisCanKillNum.GetInt();
 
     public override void OnMeetingHudStart(PlayerControl player)
     {
@@ -86,23 +93,21 @@ internal class Nemesis : RoleBase
 
         if (msg == "/rv")
         {
+            bool canSeeRoles = pc.CanSeeOtherRolesAsGhost();
             string text = GetString("PlayerIdList");
             foreach (var npc in Main.AllAlivePlayerControls)
-                text += "\n" + npc.PlayerId.ToString() + " → (" + npc.GetDisplayRoleAndSubName(npc, false) + ") " + npc.GetRealName();
+                text += $"\n{npc.PlayerId} → " + (canSeeRoles ? $"({pc.GetDisplayRoleAndSubName(npc, isMeeting: GameStates.IsMeeting)}) " : string.Empty) + npc.GetRealName();
             Utils.SendMessage(text, pc.PlayerId);
             return true;
         }
 
-        if (NemesisRevenged.TryGetValue(pc.PlayerId, out var killNum) && killNum >= NemesisCanKillNum.GetInt())
+        int killNum = NemesisRevenged.GetValueOrDefault(pc.PlayerId);
+        if (killNum >= NemesisCanKillNum.GetInt())
         {
             pc.ShowInfoMessage(isUI, GetString("NemesisKillMax"));
             return true;
         }
 
-        else
-        {
-            NemesisRevenged.Add(pc.PlayerId, 0);
-        }
 
         int targetId;
         PlayerControl target;
@@ -154,7 +159,20 @@ internal class Nemesis : RoleBase
 
         string Name = target.GetRealName();
 
-        NemesisRevenged[pc.PlayerId]++;
+        int used = killNum + 1;
+        NemesisRevenged[pc.PlayerId] = used;
+        if (pc.AmOwner)
+        {
+            if (used == NemesisCanKillNum.GetInt()) RefreshGhostRoleText();
+        }
+        else if (pc.IsModded() && pc.GetClientId() is >= 0 and var clientId)
+        {
+            CustomRpcTransport.Send(CustomRPC.SyncRoleSkill, writer =>
+            {
+                writer.WriteNetObject(pc);
+                writer.WritePacked(used);
+            }, clientId);
+        }
 
         CustomSoundsManager.RPCPlayCustomSoundAll("AWP");
 
@@ -185,6 +203,13 @@ internal class Nemesis : RoleBase
         writer.Write(playerId);
         CustomRpcTransport.Finish(writer);
     }
+    public override void ReceiveRPC(MessageReader reader, PlayerControl pc)
+    {
+        var used = reader.ReadPackedInt32();
+        NemesisRevenged[pc.PlayerId] = used;
+        if (pc.AmOwner && used == NemesisCanKillNum.GetInt()) RefreshGhostRoleText();
+    }
+
     public static void ReceiveRPC_Custom(MessageReader reader, PlayerControl pc)
     {
         int PlayerId = reader.ReadByte();

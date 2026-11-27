@@ -1,4 +1,5 @@
 ﻿using Hazel;
+using InnerNet;
 using TOHE.Modules;
 using TOHE.Roles.Double;
 using UnityEngine;
@@ -23,6 +24,7 @@ internal class Retributionist : RoleBase
     private static OptionItem RetributionistCanKillNum;
     private static OptionItem MinimumPlayersAliveToRetri;
     private static OptionItem CanOnlyRetributeWithTasksDone;
+    private static OptionItem PreventSeeRolesBeforeSkillUsedUp;
 
     private static readonly Dictionary<byte, int> RetributionistRevenged = [];
 
@@ -38,6 +40,8 @@ internal class Retributionist : RoleBase
         CanOnlyRetributeWithTasksDone = BooleanOptionItem.Create(Id + 12, "CanOnlyRetributeWithTasksDone", true, TabGroup.CrewmateRoles, false)
             .SetParent(CustomRoleSpawnChances[CustomRoles.Retributionist]);
         OverrideTasksData.Create(Id + 13, TabGroup.CrewmateRoles, CustomRoles.Retributionist);
+        PreventSeeRolesBeforeSkillUsedUp = BooleanOptionItem.Create(Id + 17, "PreventSeeRolesBeforeSkillUsedUp", true, TabGroup.CrewmateRoles, false)
+            .SetParent(CustomRoleSpawnChances[CustomRoles.Retributionist]);
     }
     public override void Init()
     {
@@ -49,6 +53,9 @@ internal class Retributionist : RoleBase
         playerIdList.Add(playerId);
         RetributionistRevenged[playerId] = 0;
     }
+    public static bool PreventKnowRole(PlayerControl seer) =>
+        seer.Is(CustomRoles.Retributionist) && PreventSeeRolesBeforeSkillUsedUp.GetBool()
+        && RetributionistRevenged.GetValueOrDefault(seer.PlayerId) < RetributionistCanKillNum.GetInt();
 
     public override string GetMark(PlayerControl seer, PlayerControl seen = null, bool isForMeeting = false)
     {
@@ -97,21 +104,19 @@ internal class Retributionist : RoleBase
 
         if (msg == "/ret")
         {
+            bool canSeeRoles = pc.CanSeeOtherRolesAsGhost();
             string text = GetString("PlayerIdList");
             foreach (var npc in Main.AllAlivePlayerControls)
-                text += "\n" + npc.PlayerId.ToString() + " → (" + npc.GetDisplayRoleAndSubName(npc, false) + ") " + npc.GetRealName();
+                text += $"\n{npc.PlayerId} → " + (canSeeRoles ? $"({pc.GetDisplayRoleAndSubName(npc, isMeeting: GameStates.IsMeeting)}) " : string.Empty) + npc.GetRealName();
             SendMessage(text, pc.PlayerId);
             return true;
         }
 
-        if (RetributionistRevenged.TryGetValue(pc.PlayerId, out var killNum) && killNum >= RetributionistCanKillNum.GetInt())
+        int killNum = RetributionistRevenged.GetValueOrDefault(pc.PlayerId);
+        if (killNum >= RetributionistCanKillNum.GetInt())
         {
             pc.ShowInfoMessage(isUI, GetString("RetributionistKillMax"));
             return true;
-        }
-        else
-        {
-            RetributionistRevenged.TryAdd(pc.PlayerId, 0);
         }
 
         int targetId;
@@ -164,7 +169,20 @@ internal class Retributionist : RoleBase
 
         string Name = target.GetRealName();
 
-        RetributionistRevenged[pc.PlayerId]++;
+        int used = killNum + 1;
+        RetributionistRevenged[pc.PlayerId] = used;
+        if (pc.AmOwner)
+        {
+            if (used == RetributionistCanKillNum.GetInt()) RefreshGhostRoleText();
+        }
+        else if (pc.IsModded() && pc.GetClientId() is >= 0 and var clientId)
+        {
+            CustomRpcTransport.Send(CustomRPC.SyncRoleSkill, writer =>
+            {
+                writer.WriteNetObject(pc);
+                writer.WritePacked(used);
+            }, clientId);
+        }
 
         CustomSoundsManager.RPCPlayCustomSoundAll("AWP");
 
@@ -199,6 +217,13 @@ internal class Retributionist : RoleBase
         writer.Write(playerId);
         CustomRpcTransport.Finish(writer);
     }
+    public override void ReceiveRPC(MessageReader reader, PlayerControl pc)
+    {
+        var used = reader.ReadPackedInt32();
+        RetributionistRevenged[pc.PlayerId] = used;
+        if (pc.AmOwner && used == RetributionistCanKillNum.GetInt()) RefreshGhostRoleText();
+    }
+
     public static void ReceiveRPC_Custom(MessageReader reader, PlayerControl pc)
     {
         int PlayerId = reader.ReadByte();

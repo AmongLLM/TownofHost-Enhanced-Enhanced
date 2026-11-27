@@ -868,6 +868,7 @@ class ReportDeadBodyPatch
         // Hereinafter, it is assumed that the button is confirmed to be pressed
         //=============================================
 
+        bool ghostVisibilityChanged = false;
         try
         {
             Main.MeetingIsStarted = true;
@@ -880,7 +881,16 @@ class ReportDeadBodyPatch
             Logger.Info($"target.Object is null? - {target?.Object == null}", "AfterReportTasks");
             Logger.Info($"target.PlayerId is - {target?.PlayerId}", "AfterReportTasks");
 
-            foreach (var playerStates in Main.PlayerStates.Values.ToArray())
+            var playerStatesAtReport = Main.PlayerStates.Values.ToArray();
+            if (Options.DelaysGhostRoleVisibility)
+            {
+                foreach (var state in playerStatesAtReport)
+                {
+                    if (state.IsDead) ghostVisibilityChanged |= Main.DeadPassedMeetingPlayers.Add(state.PlayerId);
+                }
+            }
+
+            foreach (var playerStates in playerStatesAtReport)
             {
                 try
                 {
@@ -937,6 +947,7 @@ class ReportDeadBodyPatch
 
             Logger.Info($"Player {pc?.Data?.PlayerName}: Id {pc.PlayerId} - is alive: {pc.IsAlive()}", "CheckIsAlive");
         }
+        if (ghostVisibilityChanged) RPC.SyncDeadPassedMeetingList();
 
         // Set meeting time
         MeetingTimeManager.OnReportDeadBody();
@@ -1367,7 +1378,7 @@ class FixedUpdateInNormalGamePatch
                 {
                     Mark.Append($"<color={Utils.GetRoleColorCode(CustomRoles.Lovers)}>♥</color>");
                 }
-                else if (target.Is(CustomRoles.Lovers) && seer.Data.IsDead)
+                else if (target.Is(CustomRoles.Lovers) && seer.CanSeeOtherRolesAsGhost())
                 {
                     Mark.Append($"<color={Utils.GetRoleColorCode(CustomRoles.Lovers)}>♥</color>");
                 }
