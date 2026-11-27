@@ -70,13 +70,16 @@ class PingTrackerUpdatePatch
 
             sb.Append(inMeeting ? VersionShowerStartPatch.MeetingCredentialsText : Main.credentialsText);
 
-            var ping = AmongUsClient.Instance.Ping;
-            string pingcolor = "#ff4500";
-            if (ping < 30) pingcolor = "#44dfcc";
-            else if (ping < 100) pingcolor = "#7bc690";
-            else if (ping < 200) pingcolor = "#f3920e";
-            else if (ping < 400) pingcolor = "#ff146e";
-            sb.Append($"\r\n<color={pingcolor}>Ping: {ping} ms</color>");
+            if (GameStates.IsOnlineGame)
+            {
+                var ping = AmongUsClient.Instance.Ping;
+                string pingcolor = "#ff4500";
+                if (ping < 30) pingcolor = "#44dfcc";
+                else if (ping < 100) pingcolor = "#7bc690";
+                else if (ping < 200) pingcolor = "#f3920e";
+                else if (ping < 400) pingcolor = "#ff146e";
+                sb.Append($"\r\n<color={pingcolor}>Ping: {ping} ms</color>");
+            }
             if (!inMeeting) sb.Append($"\r\n<color=#a54aff>Server: <color=#f34c50>{Utils.GetRegionName()}</color>");
 
             if (!GameStates.IsModHost)
@@ -138,8 +141,21 @@ class PingTrackerUpdatePatch
         // The cached branch neither allocates a new StringBuilder string nor
         // reapplies TMP properties on every frame. External text changes still repair immediately.
         if (tracker.text.text != renderedStatus) tracker.text.text = renderedStatus;
-        PositionStatusText(tracker);
     }
+
+    [HarmonyAfter("gg.reactor.api")]
+    private static void Postfix(PingTracker __instance)
+    {
+        if (!__instance || !__instance.text) return;
+        // Measure the final text, including the credits Reactor adds after the prefix.
+        try { PositionStatusText(__instance); }
+        catch (System.Exception error)
+        {
+            layoutCached = false;
+            Logger.Exception(error, "PingTrackerUpdatePatch.Postfix");
+        }
+    }
+
     private static void PositionStatusText(PingTracker tracker)
     {
         var text = tracker.text;

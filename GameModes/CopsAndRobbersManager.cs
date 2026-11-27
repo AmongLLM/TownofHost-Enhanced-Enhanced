@@ -401,9 +401,10 @@ internal static class CopsAndRobbersManager
     {
         Dictionary<byte, CustomRoles> finalRoles = [];
         var random = IRandom.Instance;
-        List<PlayerControl> AllPlayers = Main.AllPlayerControls.Where(pc => pc != null && !pc.Data.Disconnected).Shuffle(random).ToList();
+        List<PlayerControl> AllPlayers = Main.AllPlayerControls.Where(pc => pc != null && !pc.Data.Disconnected
+            && (!GameStates.IsFreePlay || pc.IsAlive() && Main.PlayerStates.ContainsKey(pc.PlayerId))).Shuffle(random).ToList();
 
-        if (Main.EnableGM.Value)
+        if (!GameStates.IsFreePlay && Main.EnableGM.Value)
         {
             finalRoles[PlayerControl.LocalPlayer.PlayerId] = CustomRoles.GM;
             AllPlayers.Remove(PlayerControl.LocalPlayer);
@@ -430,6 +431,17 @@ internal static class CopsAndRobbersManager
         SendCandRData(6);
         return finalRoles;
     }
+
+    internal static void ChangeFreeplayRole(PlayerControl player, CustomRoles role)
+    {
+        byte id = player.PlayerId;
+        OnPlayerDisconnect(id);
+        if (role == CustomRoles.Cop) RoleType.Cop.Add(id);
+        else if (role == CustomRoles.Robber) RoleType.Robber.Add(id);
+        else if (Main.OvverideOutfit.Remove(id))
+            player.SetNewOutfit(Main.PlayerStates[id].NormalOutfit, setName: false, setNamePlate: false);
+    }
+
     private static void Add(this RoleType role, byte playerId)
     {
         defaultSpeed[playerId] = Main.AllPlayerSpeed[playerId];

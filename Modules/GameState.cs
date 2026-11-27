@@ -430,15 +430,15 @@ public static class GameStates
         : AmongUsClient.Instance.AmHost || Main.playerVersion.ContainsKey(AmongUsClient.Instance.HostId));
     public static bool IsNormalGame => GameOptionsManager.Instance.CurrentGameOptions.GameMode is GameModes.Normal or GameModes.NormalFools;
     public static bool IsHideNSeek => GameOptionsManager.Instance.CurrentGameOptions.GameMode is GameModes.HideNSeek or GameModes.SeekFools;
-    public static bool SkeldIsActive => (MapNames)GameOptionsManager.Instance.CurrentGameOptions.MapId == MapNames.Skeld;
-    public static bool MiraHQIsActive => (MapNames)GameOptionsManager.Instance.CurrentGameOptions.MapId == MapNames.MiraHQ;
-    public static bool PolusIsActive => (MapNames)GameOptionsManager.Instance.CurrentGameOptions.MapId == MapNames.Polus;
-    public static bool DleksIsActive => (MapNames)GameOptionsManager.Instance.CurrentGameOptions.MapId == MapNames.Dleks;
-    public static bool AirshipIsActive => (MapNames)GameOptionsManager.Instance.CurrentGameOptions.MapId == MapNames.Airship;
-    public static bool FungleIsActive => (MapNames)GameOptionsManager.Instance.CurrentGameOptions.MapId == MapNames.Fungle;
+    public static bool SkeldIsActive => Utils.GetActiveMapName() == MapNames.Skeld;
+    public static bool MiraHQIsActive => Utils.GetActiveMapName() == MapNames.MiraHQ;
+    public static bool PolusIsActive => Utils.GetActiveMapName() == MapNames.Polus;
+    public static bool DleksIsActive => Utils.GetActiveMapName() == MapNames.Dleks;
+    public static bool AirshipIsActive => Utils.GetActiveMapName() == MapNames.Airship;
+    public static bool FungleIsActive => Utils.GetActiveMapName() == MapNames.Fungle;
     public static bool IsLobby => !IsFreePlay && AmongUsClient.Instance.GameState == InnerNet.InnerNetClient.GameStates.Joined;
     public static bool IsCoStartGame => !InGame && !DestroyableSingleton<GameStartManager>.InstanceExists;
-    public static bool IsInGame => InGame;
+    public static bool IsInGame => AmongUsClient.Instance && IsFreePlay ? FreeplayInitialization.IsReady : InGame;
     public static bool IsEnded => IsFreePlay
         ? IsNotJoined || AmongUsClient.Instance.IsGameOver
         : AmongUsClient.Instance.IsGameOver || GameStates.IsLobby || GameEndCheckerForNormal.GameIsEnded;
@@ -455,8 +455,8 @@ public static class GameStates
     }
     public static bool IsLocalGame => AmongUsClient.Instance.NetworkMode == NetworkModes.LocalGame;
     public static bool IsFreePlay => AmongUsClient.Instance.NetworkMode == NetworkModes.FreePlay;
-    public static bool IsInTask => InGame && !MeetingHud.Instance;
-    public static bool IsMeeting => InGame && MeetingHud.Instance;
+    public static bool IsInTask => IsInGame && !MeetingHud.Instance;
+    public static bool IsMeeting => IsInGame && MeetingHud.Instance;
     public static bool IsVoting => IsMeeting && MeetingHud.Instance.state is MeetingHud.MeetingStates.Voted or MeetingHud.MeetingStates.NotVoted;
     public static bool IsProceeding => IsMeeting && MeetingHud.Instance.state is MeetingHud.MeetingStates.Proceeding;
     public static bool IsExilling => ExileController.Instance != null && !(AirshipIsActive && Minigame.Instance != null && Minigame.Instance.isActiveAndEnabled);

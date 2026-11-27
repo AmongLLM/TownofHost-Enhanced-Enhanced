@@ -45,6 +45,11 @@ class InstalledTaskStatePatch
 
     public static void Postfix(NetworkedPlayerInfo __instance)
     {
+        if (GameStates.IsFreePlay)
+        {
+            if (FreeplayInitialization.IsReady) FreeplayInitialization.SyncTasks(__instance?.Object);
+            return;
+        }
         if (!CustomTaskCountsPatch.UsesCustomCounts || __instance == null || __instance.Disconnected ||
             __instance.Tasks == null || __instance.Object == null || __instance.Role == null ||
             GameData.Instance == null ||

@@ -207,6 +207,8 @@ public static class SpeedrunManager
         var alive = GetAliveRunners();
         foreach (var player in alive)
         {
+            // Freeplay dummies are practice targets, so they have no task list or client timer.
+            if (GameStates.IsFreePlay && !player.AmOwner) continue;
             var progress = Progress[player.PlayerId];
             if (progress.TotalTasks == 0 && player.GetRoleClass() is Runner runner)
             {

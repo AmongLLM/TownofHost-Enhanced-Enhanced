@@ -250,8 +250,14 @@ public static class Utils
         _ => SystemTypes.Reactor,
     };
 
-    public static MapNames GetActiveMapName() => (MapNames)GameOptionsManager.Instance.CurrentGameOptions.MapId;
-    public static byte GetActiveMapId() => GameOptionsManager.Instance.CurrentGameOptions.MapId;
+    public static MapNames GetActiveMapName() => (MapNames)GetActiveMapId();
+    public static byte GetActiveMapId()
+    {
+        var client = AmongUsClient.Instance;
+        return client && client.NetworkMode == NetworkModes.FreePlay
+            ? (byte)client.TutorialMapId
+            : GameOptionsManager.Instance.CurrentGameOptions.MapId;
+    }
 
     public static void SetVision(this IGameOptions opt, bool HasImpVision)
     {
@@ -720,7 +726,7 @@ public static class Utils
     {
         try
         {
-            if (!Main.playerVersion.ContainsKey(AmongUsClient.Instance.HostId)) return string.Empty;
+            if (GameStates.IsFreePlay ? !FreeplayInitialization.IsReady : !Main.playerVersion.ContainsKey(AmongUsClient.Instance.HostId)) return string.Empty;
             var taskState = pc.GetPlayerTaskState();
             var Comms = false;
             if (taskState.hasTasks)
@@ -744,7 +750,7 @@ public static class Utils
     {
         try
         {
-            if (!Main.playerVersion.ContainsKey(AmongUsClient.Instance.HostId)) return string.Empty;
+            if (GameStates.IsFreePlay ? !FreeplayInitialization.IsReady : !Main.playerVersion.ContainsKey(AmongUsClient.Instance.HostId)) return string.Empty;
             var role = Main.PlayerStates[playerId].MainRole;
 
             if (Options.CurrentGameMode == CustomGameMode.Speedrun && role == CustomRoles.Runner)
@@ -1918,7 +1924,7 @@ public static class Utils
     }
     public static Task DoNotifyRoles(PlayerControl SpecifySeer = null, PlayerControl SpecifyTarget = null, bool isForMeeting = false, bool NoCache = false, bool ForceLoop = true, bool CamouflageIsForMeeting = false, bool MushroomMixupIsActive = false)
     {
-        if (!AmongUsClient.Instance.AmHost || GameStates.IsHideNSeek || Main.AllPlayerControls == null
+        if (!AmongUsClient.Instance.AmHost || GameStates.IsFreePlay || GameStates.IsHideNSeek || Main.AllPlayerControls == null
             || SetUpRoleTextPatch.IsInIntro && !isForMeeting) return Task.CompletedTask;
         if (GameStates.IsMeeting)
         {

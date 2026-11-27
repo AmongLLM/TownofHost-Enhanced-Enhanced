@@ -77,7 +77,6 @@ internal static class ManagementCommands
                 executed.SetDeathReason(PlayerState.DeathReason.etc);
                 executed.SetRealKiller(sender);
                 state.SetDead();
-                executed.Data.IsDead = true;
                 executed.RpcExileV2();
                 MurderPlayerPatch.AfterPlayerDeathTasks(sender, executed, GameStates.IsMeeting);
                 Utils.SendMessage(executed.OwnerId == client.HostId ? GetString("HostKillSelfByCommand") : string.Format(GetString("Message.Executed"), executedName));

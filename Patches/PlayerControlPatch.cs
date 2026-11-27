@@ -733,13 +733,16 @@ class ReportDeadBodyPatch
     {
         if (GameStates.IsMeeting || GameStates.IsHideNSeek || AntiBlackout.AirshipRecoveryInProgress) return false;
 
-        if (EAC.RpcReportDeadBodyCheck(__instance, target))
+        if (!GameStates.IsFreePlay && EAC.RpcReportDeadBodyCheck(__instance, target))
         {
             Logger.Fatal("Eac patched the report body rpc", "ReportDeadBodyPatch");
             return false;
         }
-        if (Options.DisableMeeting.GetBool()) return false;
-        if (Options.CurrentGameMode is CustomGameMode.FFA or CustomGameMode.CandR or CustomGameMode.Speedrun) return false;
+        var mode = Options.CurrentGameMode;
+        // The emergency console passes a null target, including in Freeplay.
+        if (mode == CustomGameMode.Speedrun && target != null) return false;
+        if (!GameStates.IsFreePlay && (Options.DisableMeeting.GetBool() ||
+            mode is CustomGameMode.FFA or CustomGameMode.CandR or CustomGameMode.Speedrun)) return false;
 
         if (!CanReport[__instance.PlayerId])
         {

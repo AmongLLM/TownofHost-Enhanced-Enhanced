@@ -31,6 +31,11 @@ class OnGameJoinedPatch
     {
         var generation = ++Generation;
         ForeignVersionCheck.Reset();
+        if (__instance.NetworkMode == NetworkModes.FreePlay)
+        {
+            OptionItem.SetRemotePreset(false);
+            return;
+        }
         if (Options.IsLoaded) InitializeSession(__instance);
         else Main.Instance.StartCoroutine(WaitForOptions(__instance, generation));
     }
@@ -246,7 +251,7 @@ public static class OnPlayerJoinedPatch
     }
     public static void Postfix(/*AmongUsClient __instance,*/ [HarmonyArgument(0)] ClientData client)
     {
-        if (client == null) return;
+        if (client == null || GameStates.IsFreePlay) return;
         if (AmongUsClient.Instance.AmHost && BanManager.IsSessionBanned(client.ProductUserId))
         {
             AmongUsClient.Instance.KickPlayer(client.Id, true);
@@ -603,7 +608,7 @@ class InnerNetClientSpawnPatch
 {
     public static void Postfix([HarmonyArgument(1)] int ownerId, [HarmonyArgument(2)] SpawnFlags flags)
     {
-        if (!AmongUsClient.Instance.AmHost || flags != SpawnFlags.IsClientCharacter) return;
+        if (!AmongUsClient.Instance.AmHost || GameStates.IsFreePlay || flags != SpawnFlags.IsClientCharacter) return;
 
         ClientData client = Utils.GetClientById(ownerId);
         var generation = OnGameJoinedPatch.Generation;

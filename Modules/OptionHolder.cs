@@ -48,7 +48,7 @@ public static class Options
     // Custom Game Mode
     public static OptionItem GameMode;
     public static CustomGameMode CurrentGameMode
-        => GameMode.GetInt() switch
+        => AmongUsClient.Instance?.NetworkMode == NetworkModes.FreePlay ? FreeplayInitialization.Mode : GameMode.GetInt() switch
         {
             1 => CustomGameMode.FFA,
             2 => CustomGameMode.HidenSeekTOHE, // Preserve the existing H&S preset index.

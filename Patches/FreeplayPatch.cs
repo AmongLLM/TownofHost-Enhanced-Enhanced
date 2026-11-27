@@ -13,6 +13,7 @@ internal static class FreeplayInitialization
 {
     private static TutorialManager tutorial;
     private static ShipStatus ship;
+    internal static CustomGameMode Mode { get; private set; } = CustomGameMode.Standard;
     public static bool IsReady => GameStates.IsFreePlay && tutorial != null && ship != null
         && ship == ShipStatus.Instance && Main.GameIsLoaded;
 
@@ -20,12 +21,13 @@ internal static class FreeplayInitialization
     {
         tutorial = owner;
         ship = null;
+        Mode = CustomGameMode.Standard;
         Main.GameIsLoaded = false;
         Main.IntroDestroyed = false;
         Main.RealOptionsData = null;
         Main.PlayerStates.Clear();
         GameStates.InGame = false;
-        GameEndCheckerForNormal.ShouldNotCheck = true;
+        GameEndCheckerForNormal.ShouldNotCheck = owner != null;
     }
 
     public static void Initialize(ShipStatus owner)
@@ -98,7 +100,7 @@ internal static class FreeplayInitialization
             Main.PlayerStates[player.PlayerId] = state;
             state.SetMainRole(CustomRoles.Crewmate);
             state.RoleClass.OnAdd(player.PlayerId);
-            state.InitTask(player);
+            SyncTasks(player);
             Main.AllPlayerKillCooldown[player.PlayerId] = Options.DefaultKillCooldown;
             Main.AllPlayerSpeed[player.PlayerId] = options.GetFloat(FloatOptionNames.PlayerSpeedMod);
             ReportDeadBodyPatch.CanReport[player.PlayerId] = true;
@@ -122,10 +124,65 @@ internal static class FreeplayInitialization
         Logger.Info($"Initialized offline FreePlay state for {Main.PlayerStates.Count} players", "FreePlay");
     }
 
-    public static void ChangeRole(PlayerControl player, CustomRoles role, bool setNativeRole)
+    internal static void ChangeMode(CustomGameMode mode)
+    {
+        if (!IsReady || Mode == mode) return;
+
+        if (Mode == CustomGameMode.CandR)
+        {
+            foreach (var player in Main.AllPlayerControls)
+            {
+                if (player && Main.PlayerStates.TryGetValue(player.PlayerId, out var state) && Main.OvverideOutfit.Remove(player.PlayerId))
+                    player.SetNewOutfit(state.NormalOutfit, setName: false, setNamePlate: false);
+            }
+        }
+
+        Mode = mode;
+        TargetArrow.Init();
+        LocateArrow.Init();
+        var players = Main.AllPlayerControls.Where(player => player && player.Data != null && !player.Data.Disconnected
+            && Main.PlayerStates.ContainsKey(player.PlayerId)).ToArray();
+        float speed = Main.RealOptionsData.GetFloat(FloatOptionNames.PlayerSpeedMod);
+        foreach (var player in players) Main.AllPlayerSpeed[player.PlayerId] = speed;
+
+        Dictionary<byte, CustomRoles> teamRoles = null;
+        switch (mode)
+        {
+            case CustomGameMode.FFA:
+                FFAManager.Init();
+                FFAManager.SetData();
+                break;
+            case CustomGameMode.CandR:
+                CopsAndRobbersManager.Init();
+                CopsAndRobbersManager.IntroRoleInfoActive = false;
+                teamRoles = CopsAndRobbersManager.SetRoles();
+                break;
+            case CustomGameMode.Speedrun:
+                SpeedrunManager.Init();
+                SpeedrunManager.IntroRoleInfoActive = false;
+                break;
+        }
+
+        foreach (var player in players)
+        {
+            var role = mode switch
+            {
+                CustomGameMode.FFA when player.IsAlive() => CustomRoles.Killer,
+                CustomGameMode.CandR => teamRoles.GetValueOrDefault(player.PlayerId, CustomRoles.Crewmate),
+                CustomGameMode.Speedrun when player.IsAlive() => CustomRoles.Runner,
+                _ => CustomRoles.Crewmate
+            };
+            ChangeRole(player, role, setNativeRole: !player.Data.IsDead, refresh: true);
+            if (role == CustomRoles.Cop) Main.UnShapeShifter.Add(player.PlayerId);
+            player.ResetKillCooldown();
+        }
+        if (mode == CustomGameMode.Speedrun) SpeedrunManager.OnTasksAssigned();
+    }
+
+    public static void ChangeRole(PlayerControl player, CustomRoles role, bool setNativeRole, bool refresh = false)
     {
         if (!IsReady || player == null || !Main.PlayerStates.TryGetValue(player.PlayerId, out var state)) return;
-        if (state.MainRole == role) return;
+        if (!refresh && state.MainRole == role) return;
         var previousRole = state.MainRole;
         state.RoleClass.OnRemove(player.PlayerId);
         Main.DesyncPlayerList.Remove(player.PlayerId);
@@ -142,15 +199,34 @@ internal static class FreeplayInitialization
         if (setNativeRole)
         {
             if (role == CustomRoles.JudgeTOHE) PrepareJudgeOptions();
-            player.RpcSetRole(role.GetRoleTypes(), true);
+            player.RpcSetRole(role == CustomRoles.Killer ? role.GetDYRole() : role.GetRoleTypes(), true);
         }
         state.RoleClass.OnAdd(player.PlayerId);
-        state.InitTask(player);
+        if (!refresh && Mode == CustomGameMode.CandR) CopsAndRobbersManager.ChangeFreeplayRole(player, role);
+        SyncTasks(player);
         CustomRoleManager.Add();
         // The native HUD rebuilds task text on its next dirty tick. A role switch
         // must also invalidate that text even when the native tasks stay the same.
         if (player.AmOwner && HudManager.Instance != null)
             HudManager.Instance.taskDirtyTimer = 0.25f;
+    }
+
+    internal static void SyncTasks(PlayerControl player)
+    {
+        if (!player || player.Data?.Tasks == null || !Main.PlayerStates.TryGetValue(player.PlayerId, out var state)) return;
+        var taskState = state.TaskState;
+        taskState.hasTasks = Utils.HasTasks(player.Data, false);
+        taskState.AllTasksCount = taskState.hasTasks ? player.Data.Tasks.Count : 0;
+        taskState.CompletedTasksCount = taskState.hasTasks ? player.Data.Tasks.ToArray().Count(t => t.Complete) : 0;
+        if (Mode == CustomGameMode.Speedrun && state.MainRole == CustomRoles.Runner
+            && SpeedrunManager.Progress.TryGetValue(player.PlayerId, out var progress) && !progress.HasFinished)
+        {
+            SpeedrunManager.Progress[player.PlayerId] = progress with
+            {
+                TotalTasks = taskState.AllTasksCount,
+                CompletedTasks = taskState.CompletedTasksCount
+            };
+        }
     }
 
     internal static void PrepareJudgeOptions()
@@ -162,15 +238,7 @@ internal static class FreeplayInitialization
 
     public static void Release(TutorialManager owner)
     {
-        if (tutorial != owner) return;
-        tutorial = null;
-        ship = null;
-        if (!GameStates.IsFreePlay) return;
-        Main.GameIsLoaded = false;
-        Main.IntroDestroyed = false;
-        Main.RealOptionsData = null;
-        GameStates.InGame = false;
-        GameEndCheckerForNormal.ShouldNotCheck = false;
+        if (tutorial != null && tutorial == owner) Reset(null);
     }
 }
 

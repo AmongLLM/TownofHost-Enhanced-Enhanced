@@ -205,12 +205,7 @@ public static class GameOptionsMenuPatch
             return indices;
 
         var roleOptions = Options.CustomRoleSpawnChances.Values.ToHashSet<OptionItem>();
-        var comparer = GetCommandLanguage() switch
-        {
-            SupportedLangs.SChinese or SupportedLangs.TChinese => StringComparer.Create(CultureInfo.GetCultureInfo("zh-CN"), ignoreCase: true),
-            SupportedLangs.English => StringComparer.Create(CultureInfo.GetCultureInfo("en-US"), ignoreCase: true),
-            _ => StringComparer.CurrentCultureIgnoreCase,
-        };
+        var comparer = GetRoleNameComparer();
         var order = new List<int>(indices.Length);
         int section = 0;
         foreach (var rows in indices.GroupBy(index => options[index] is TextOptionItem ? ++section : section))
@@ -231,6 +226,13 @@ public static class GameOptionsMenuPatch
         }
         return order.ToArray();
     }
+
+    internal static StringComparer GetRoleNameComparer() => GetCommandLanguage() switch
+    {
+        SupportedLangs.SChinese or SupportedLangs.TChinese => StringComparer.Create(CultureInfo.GetCultureInfo("zh-CN"), ignoreCase: true),
+        SupportedLangs.English => StringComparer.Create(CultureInfo.GetCultureInfo("en-US"), ignoreCase: true),
+        _ => StringComparer.CurrentCultureIgnoreCase,
+    };
 
     [HarmonyPatch(nameof(GameOptionsMenu.CreateSettings)), HarmonyPrefix]
     private static bool CreateSettingsPrefix(GameOptionsMenu __instance)

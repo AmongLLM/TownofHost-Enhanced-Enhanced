@@ -266,13 +266,6 @@ public static class MainMenuManagerPatch
         }
         cloudButton.gameObject.SetActive(false);
 
-        var howToPlayButton = __instance.howToPlayButton;
-        var freeplayButton = howToPlayButton.transform.parent.Find("FreePlayButton");
-
-        if (freeplayButton != null) freeplayButton.gameObject.SetActive(false);
-
-        howToPlayButton.transform.SetLocalX(0);
-
         CustomSoundMenu.Create(__instance);
 
     }
