@@ -65,7 +65,7 @@ internal static class RoleAssignmentCatalog
         }
         var quotas = new Dictionary<AssignmentTeam, int>
         {
-            [AssignmentTeam.Impostor] = Main.RealOptionsData.GetInt(Int32OptionNames.NumImpostors),
+            [AssignmentTeam.Impostor] = !Options.UseVariableImp.GetBool() ? Main.RealOptionsData.GetInt(Int32OptionNames.NumImpostors) : (Count(Options.ImpRolesMinPlayer, Options.ImpRolesMaxPlayer)),
             [AssignmentTeam.NonKillingNeutral] = Count(Options.NonNeutralKillingRolesMinPlayer, Options.NonNeutralKillingRolesMaxPlayer),
             [AssignmentTeam.NeutralKilling] = Count(Options.NeutralKillingRolesMinPlayer, Options.NeutralKillingRolesMaxPlayer),
             [AssignmentTeam.NeutralApocalypse] = Count(Options.NeutralApocalypseRolesMinPlayer, Options.NeutralApocalypseRolesMaxPlayer)
